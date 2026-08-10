@@ -44,7 +44,7 @@ import { fromUint8Array } from 'js-base64';
 import { crypto as cryptoUtils } from './crypto';
 import { collabStore } from './storage/collab-store';
 import { docStore } from './storage/doc-store';
-import { useSwarmImageStorage } from './storage/swarm-store';
+import { swarmEnabled, useSwarmStorage } from './storage/swarm-store';
 import { DocumentStylingPanel } from './DocumentStylingPanel';
 import {
   DocumentStyling,
@@ -102,19 +102,58 @@ function App() {
 
   const urlTabId = getTabIdFromURL();
 
-  // Swarm image storage — active when VITE_BEE_API_URL is set (see
-  // storage/swarm-store.ts); otherwise images stay inline.
-  const { imageUploadFn, imageFetchFn } = useSwarmImageStorage();
+  // Swarm storage (images + document snapshots) — active when
+  // VITE_BEE_API_URL is set (see storage/swarm-store.ts).
+  const { imageUploadFn, imageFetchFn, docStorage, stampHealth } =
+    useSwarmStorage(docId);
+  const [swarmStatus, setSwarmStatus] = useState<
+    | { state: 'off' }
+    | { state: 'saving' }
+    | { state: 'saved'; version: number }
+    | { state: 'error'; message: string }
+  >({ state: 'off' });
 
   const isOwnerEdSecretSet = import.meta.env.VITE_OWNER_ED_SECRET;
   // --- Persistence ---
   // Use undefined (not null) when no saved content — null has special meaning
   // in use-tab-editor.tsx (it signals "content explicitly not ready yet")
-  const [initialContent] = useState<string | undefined>(
+  const [initialContent, setInitialContent] = useState<string | undefined>(
     () => docStore.getContent(docId) || undefined,
   );
+  // No local copy — try restoring the latest version from Swarm before the
+  // editor mounts (e.g. same document opened in another browser).
+  const [swarmRestoring, setSwarmRestoring] = useState(
+    () => swarmEnabled && !docStore.getContent(docId),
+  );
+  useEffect(() => {
+    if (!swarmRestoring || !docStorage) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const snapshot = await docStorage.loadDocument(docId);
+        if (cancelled) return;
+        if (snapshot) {
+          setInitialContent(snapshot.text);
+          setSwarmStatus({ state: 'saved', version: snapshot.feedIndex });
+          console.info(
+            `Swarm: restored document version ${snapshot.feedIndex}`,
+          );
+        }
+      } catch (error) {
+        console.warn('Swarm restore failed', error);
+      } finally {
+        if (!cancelled) setSwarmRestoring(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [swarmRestoring, docStorage, docId]);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const swarmSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   const handleContentChange = useCallback(
     (
@@ -130,9 +169,33 @@ function App() {
           docStore.setContent(docId, updatedDocContent);
           setLastSavedAt(Date.now());
         }, 100);
+
+        // Swarm persistence: each (debounced) save is an immutable version
+        // on the document's feed.
+        if (docStorage) {
+          if (swarmSaveTimeoutRef.current) {
+            clearTimeout(swarmSaveTimeoutRef.current);
+          }
+          swarmSaveTimeoutRef.current = setTimeout(async () => {
+            setSwarmStatus({ state: 'saving' });
+            try {
+              const version = await docStorage.saveDocument(
+                docId,
+                updatedDocContent,
+              );
+              setSwarmStatus({ state: 'saved', version: version.index });
+            } catch (error) {
+              console.error('Swarm save failed', error);
+              setSwarmStatus({
+                state: 'error',
+                message: (error as Error).message,
+              });
+            }
+          }, 2000);
+        }
       }
     },
-    [docId],
+    [docId, docStorage],
   );
 
   // --- Tab deep linking ---
@@ -557,6 +620,27 @@ function App() {
           >
             {lastSavedAt ? 'Saved' : 'Not saved yet'}
           </Tag>
+          {swarmStatus.state !== 'off' && (
+            <Tag
+              icon={swarmStatus.state === 'error' ? 'CircleAlert' : 'Globe'}
+              variant="transparent"
+              className="h-6 rounded border color-border-default color-text-secondary text-[12px] font-normal hidden xl:flex"
+              style={{ backgroundColor: 'hsl(var(--color-bg-secondary))' }}
+              title={
+                stampHealth
+                  ? `Postage stamp ${stampHealth.status} — ${Math.round(stampHealth.utilization * 100)}% full, expires ${stampHealth.expiresAt.toLocaleDateString()}`
+                  : undefined
+              }
+            >
+              {swarmStatus.state === 'saving' && 'Swarm: saving…'}
+              {swarmStatus.state === 'saved' &&
+                `Swarm: saved v${swarmStatus.version}`}
+              {swarmStatus.state === 'error' && 'Swarm: save failed'}
+              {stampHealth && stampHealth.status !== 'ok'
+                ? ` · stamp ${stampHealth.status}`
+                : ''}
+            </Tag>
+          )}
           <div className="w-6 h-6 rounded color-bg-secondary flex justify-center items-center border color-border-default xl:hidden">
             <LucideIcon
               name="BadgeCheck"
@@ -825,6 +909,11 @@ function App() {
         documentStyling={documentStyling}
         onStylingChange={setDocumentStyling}
       />
+      {swarmRestoring ? (
+        <div className="flex items-center justify-center h-96 color-text-secondary">
+          Restoring document from Swarm…
+        </div>
+      ) : (
       <DdocEditor
         ref={editorRef}
         imageUploadFn={imageUploadFn}
@@ -901,6 +990,7 @@ function App() {
         setWordCount={setWordCount}
         setPageCount={setPageCount}
       />
+      )}
       <LinkModal
         open={linkModalOpen}
         onOpenChange={setLinkModalOpen}
