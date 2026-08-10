@@ -6,9 +6,11 @@
 
 By default the demo inlines images into the document. To store them
 encrypted on [Ethereum Swarm](https://www.ethswarm.org/) instead, point the
-demo at a Bee node before starting it:
+demo at a Bee node before starting it — run from this directory (`demo/`),
+which is its own vite project:
 
 ```bash
+cd demo && npm i
 VITE_BEE_API_URL=http://localhost:1633 npm run dev
 ```
 
