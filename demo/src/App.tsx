@@ -65,6 +65,14 @@ const unpackSnapshot = (text: string): { title?: string; content: string } => {
   return { content: text };
 };
 
+/** Keep ?swarmVersion=N in the address bar (shareable) without reloading. */
+const syncVersionParam = (n: number | null) => {
+  const url = new URL(window.location.href);
+  if (n === null) url.searchParams.delete('swarmVersion');
+  else url.searchParams.set('swarmVersion', String(n));
+  window.history.replaceState(null, '', url.toString());
+};
+
 /** Official Swarm mark (ethswarm.org), drawn in the current text color. */
 const SwarmIcon = () => (
   <svg
@@ -145,13 +153,30 @@ function App() {
     | { state: 'saved'; version: number }
     | { state: 'error'; message: string }
   >({ state: 'off' });
-  // Version viewing: ?swarmVersion=N pins the editor to a historical
-  // snapshot (read from the feed); saving is suspended while viewing.
-  const [viewingVersion] = useState<number | null>(() => {
-    const v = new URLSearchParams(window.location.search).get('swarmVersion');
-    return v === null ? null : Number(v);
-  });
-  const viewedTextRef = useRef<string | null>(null);
+  // Version preview — through the package's versionHistoryState
+  // convention: selecting a version re-hydrates the mounted editor in
+  // place (no page reload), and the package itself suspends IndexedDB
+  // sync and persistence while version mode is on. ?swarmVersion=N
+  // deep-links to a version.
+  const [versionPreview, setVersionPreview] = useState<{
+    index: number;
+    /** Unpacked editor content, handed to versionHistoryState. */
+    content: string;
+    /** Full snapshot envelope, re-saved verbatim on restore. */
+    raw: string;
+    title?: string;
+  } | null>(null);
+  // Bumped when leaving version preview so the editor remounts into a
+  // fresh live session (mirrors PreviewDdocEditor's own keyed remount).
+  const [editorEpoch, setEditorEpoch] = useState(0);
+  const pendingVersionParamRef = useRef<number | null>(
+    (() => {
+      const v = new URLSearchParams(window.location.search).get(
+        'swarmVersion',
+      );
+      return v === null ? null : Number(v);
+    })(),
+  );
   const [versionList, setVersionList] = useState<DocumentVersion[] | null>(
     null,
   );
@@ -162,13 +187,6 @@ function App() {
     top: number;
     left: number;
   }>({ top: 0, left: 0 });
-
-  const gotoVersion = (n: number | null) => {
-    const url = new URL(window.location.href);
-    if (n === null) url.searchParams.delete('swarmVersion');
-    else url.searchParams.set('swarmVersion', String(n));
-    window.location.href = url.toString();
-  };
 
   const swarmTagRef = useRef<HTMLButtonElement | null>(null);
   const openVersionHistory = useCallback(async () => {
@@ -195,29 +213,23 @@ function App() {
   const [initialContent, setInitialContent] = useState<string | undefined>(
     () => docStore.getContent(docId) || undefined,
   );
-  // Restore from Swarm before the editor mounts: always when viewing a
-  // pinned historical version, otherwise only when there is no local copy
-  // (e.g. same document opened in another browser).
+  // Restore the latest version from Swarm before the editor mounts when
+  // there is no local copy (e.g. same document opened in another browser).
   const [swarmRestoring, setSwarmRestoring] = useState(
-    () =>
-      swarmEnabled && (viewingVersion !== null || !docStore.getContent(docId)),
+    () => swarmEnabled && !docStore.getContent(docId),
   );
   useEffect(() => {
     if (!swarmRestoring || !docStorage) return;
     let cancelled = false;
     (async () => {
       try {
-        const snapshot =
-          viewingVersion !== null
-            ? await docStorage.loadDocumentVersion(docId, viewingVersion)
-            : await docStorage.loadDocument(docId);
+        const snapshot = await docStorage.loadDocument(docId);
         if (cancelled) return;
         if (snapshot) {
           const { title: restoredTitle, content } = unpackSnapshot(
             snapshot.text,
           );
           setInitialContent(content);
-          viewedTextRef.current = snapshot.text;
           lastContentRef.current = content;
           if (restoredTitle) {
             setTitle(restoredTitle);
@@ -238,7 +250,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [swarmRestoring, docStorage, docId, viewingVersion]);
+  }, [swarmRestoring, docStorage, docId]);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const swarmSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -249,9 +261,71 @@ function App() {
   const titleRef = useRef<string>('Untitled');
   const lastContentRef = useRef<string | null>(docStore.getContent(docId));
 
+  /** Load a snapshot and enter version mode — the mounted editor
+   *  re-hydrates via versionHistoryState (versionId keys the hydration). */
+  const previewVersion = useCallback(
+    async (index: number) => {
+      if (!docStorage) return;
+      try {
+        const snapshot = await docStorage.loadDocumentVersion(docId, index);
+        if (!snapshot) return;
+        const { title: vTitle, content } = unpackSnapshot(snapshot.text);
+        setVersionPreview({ index, content, raw: snapshot.text, title: vTitle });
+        syncVersionParam(index);
+      } catch (error) {
+        console.warn('Swarm version load failed', error);
+      }
+    },
+    [docStorage, docId],
+  );
+
+  const exitVersionPreview = useCallback(() => {
+    setVersionPreview(null);
+    syncVersionParam(null);
+    // Fresh live session hydrating the latest saved content (edits made
+    // since page load live in docStore, not in the mount-time snapshot).
+    setInitialContent(docStore.getContent(docId) || undefined);
+    setEditorEpoch((e) => e + 1);
+  }, [docId]);
+
+  /** Append the previewed snapshot as a new latest version (history is
+   *  immutable — restore never rewrites it). */
+  const restorePreviewAsLatest = useCallback(async () => {
+    if (!docStorage || !versionPreview) return;
+    try {
+      const version = await docStorage.saveDocument(docId, versionPreview.raw);
+      docStore.setContent(docId, versionPreview.content);
+      setInitialContent(versionPreview.content);
+      lastContentRef.current = versionPreview.content;
+      if (versionPreview.title) {
+        setTitle(versionPreview.title);
+        titleRef.current = versionPreview.title;
+        docStore.updateDocTitle(docId, versionPreview.title);
+      }
+      setSwarmStatus({ state: 'saved', version: version.index });
+      setVersionList(null);
+    } catch (error) {
+      console.error('Swarm restore failed', error);
+      setSwarmStatus({
+        state: 'error',
+        message: (error as Error).message,
+      });
+    }
+    exitVersionPreview();
+  }, [docStorage, docId, versionPreview, exitVersionPreview]);
+
+  // ?swarmVersion=N deep link: enter version preview once storage is ready.
+  useEffect(() => {
+    const pending = pendingVersionParamRef.current;
+    if (pending !== null && docStorage && !swarmRestoring) {
+      pendingVersionParamRef.current = null;
+      previewVersion(pending);
+    }
+  }, [docStorage, swarmRestoring, previewVersion]);
+
   const scheduleSwarmSave = useCallback(
     (content: string) => {
-      if (!docStorage || viewingVersion !== null) return;
+      if (!docStorage || versionPreview) return;
       lastContentRef.current = content;
       if (swarmSaveTimeoutRef.current) {
         clearTimeout(swarmSaveTimeoutRef.current);
@@ -273,7 +347,7 @@ function App() {
         }
       }, 2000);
     },
-    [docId, docStorage, viewingVersion],
+    [docId, docStorage, versionPreview],
   );
 
   const handleContentChange = useCallback(
@@ -282,8 +356,9 @@ function App() {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       _updateChunk: string,
     ) => {
-      // Viewing a historical version: never overwrite local or Swarm state.
-      if (viewingVersion !== null) return;
+      // Viewing a historical version: never overwrite local or Swarm state
+      // (the package also suspends its own persistence in version mode).
+      if (versionPreview) return;
       if (typeof updatedDocContent === 'string') {
         if (saveTimeoutRef.current) {
           clearTimeout(saveTimeoutRef.current);
@@ -298,7 +373,7 @@ function App() {
         scheduleSwarmSave(updatedDocContent);
       }
     },
-    [docId, scheduleSwarmSave, viewingVersion],
+    [docId, scheduleSwarmSave, versionPreview],
   );
 
   // --- Tab deep linking ---
@@ -756,8 +831,8 @@ function App() {
                 }
               >
                 <SwarmIcon />
-                {viewingVersion !== null
-                  ? `Swarm: viewing v${viewingVersion}`
+                {versionPreview
+                  ? `Swarm: viewing v${versionPreview.index}`
                   : swarmStatus.state === 'saving'
                     ? 'Swarm: saving…'
                     : swarmStatus.state === 'saved'
@@ -778,34 +853,25 @@ function App() {
                     zIndex: 99999,
                   }}
                 >
-                  {viewingVersion !== null && (
+                  {versionPreview && (
                     <>
                       <button
                         type="button"
                         className="w-full text-left px-3 py-2 hover:color-bg-secondary font-medium"
                         onClick={async () => {
-                          if (docStorage && viewedTextRef.current) {
-                            await docStorage.saveDocument(
-                              docId,
-                              viewedTextRef.current,
-                            );
-                            const restored = unpackSnapshot(
-                              viewedTextRef.current,
-                            );
-                            docStore.setContent(docId, restored.content);
-                            if (restored.title) {
-                              docStore.updateDocTitle(docId, restored.title);
-                            }
-                          }
-                          gotoVersion(null);
+                          setVersionsOpen(false);
+                          await restorePreviewAsLatest();
                         }}
                       >
-                        ⤴ Restore v{viewingVersion} as latest
+                        ⤴ Restore v{versionPreview.index} as latest
                       </button>
                       <button
                         type="button"
                         className="w-full text-left px-3 py-2 hover:color-bg-secondary"
-                        onClick={() => gotoVersion(null)}
+                        onClick={() => {
+                          setVersionsOpen(false);
+                          exitVersionPreview();
+                        }}
                       >
                         ← Back to latest
                       </button>
@@ -830,14 +896,16 @@ function App() {
                         key={v.index}
                         type="button"
                         className="w-full text-left px-3 py-2 hover:color-bg-secondary flex justify-between gap-3"
-                        onClick={() => gotoVersion(v.index)}
+                        onClick={() => previewVersion(v.index)}
                       >
                         <span>
                           v{v.index}
                           {v.index === versionList[versionList.length - 1].index
                             ? ' (latest)'
                             : ''}
-                          {v.index === viewingVersion ? ' — viewing' : ''}
+                          {v.index === versionPreview?.index
+                            ? ' — viewing'
+                            : ''}
                         </span>
                         <span className="color-text-secondary">
                           {new Date(v.timestamp * 1000).toLocaleString()}
@@ -1124,13 +1192,26 @@ function App() {
       ) : (
       <DdocEditor
         ref={editorRef}
+        /* Stable key while switching versions (versionId re-hydrates the
+           mounted editor); epoch bump on preview exit remounts a fresh
+           live session — the pattern PreviewDdocEditor uses internally. */
+        key={versionPreview ? 'swarm-version-preview' : `live-${editorEpoch}`}
+        versionHistoryState={
+          versionPreview
+            ? {
+                enabled: true,
+                versionId: `swarm-v${versionPreview.index}`,
+                content: versionPreview.content,
+              }
+            : undefined
+        }
         imageUploadFn={imageUploadFn}
         imageFetchFn={imageFetchFn}
         fonts={demoFonts}
         collaboration={collaboration}
         username={username}
         setUsername={setUsername}
-        isPreviewMode={isPreviewMode}
+        isPreviewMode={isPreviewMode || Boolean(versionPreview)}
         disableInlineComment={disableInlineComment}
         onChange={handleContentChange}
         initialContent={initialContent}
