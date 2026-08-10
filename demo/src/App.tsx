@@ -45,6 +45,21 @@ import { crypto as cryptoUtils } from './crypto';
 import { collabStore } from './storage/collab-store';
 import { docStore } from './storage/doc-store';
 import { swarmEnabled, useSwarmStorage } from './storage/swarm-store';
+import { DocumentVersion } from '../../package/utils/swarm-document-storage';
+
+/** Official Swarm mark (ethswarm.org), drawn in the current text color. */
+const SwarmIcon = () => (
+  <svg
+    viewBox="0 0 1115 1115"
+    width="12"
+    height="12"
+    fill="currentColor"
+    aria-hidden="true"
+  >
+    <path d="M0 665.01V965l260 150 260-150.01V664.96L260 515 0 665.01zM855 515 595 665v299.99L855 1115l260-150.01V664.95L855 515zM817.32 300.27l-129.91-75.25-.13-149.98L557.5 0 297.68 150.01V450L557.5 600l259.82-150V300.27z" />
+    <path d="m817.32 300.27 129.91-75.3V75L817.52 0 687.28 75.04l130.24 74.83-.2 150.4z" />
+  </svg>
+);
 import { DocumentStylingPanel } from './DocumentStylingPanel';
 import {
   DocumentStyling,
@@ -112,6 +127,24 @@ function App() {
     | { state: 'saved'; version: number }
     | { state: 'error'; message: string }
   >({ state: 'off' });
+  // Version viewing: ?swarmVersion=N pins the editor to a historical
+  // snapshot (read from the feed); saving is suspended while viewing.
+  const [viewingVersion] = useState<number | null>(() => {
+    const v = new URLSearchParams(window.location.search).get('swarmVersion');
+    return v === null ? null : Number(v);
+  });
+  const viewedTextRef = useRef<string | null>(null);
+  const [versionList, setVersionList] = useState<DocumentVersion[] | null>(
+    null,
+  );
+  const [versionsOpen, setVersionsOpen] = useState(false);
+
+  const gotoVersion = (n: number | null) => {
+    const url = new URL(window.location.href);
+    if (n === null) url.searchParams.delete('swarmVersion');
+    else url.searchParams.set('swarmVersion', String(n));
+    window.location.href = url.toString();
+  };
 
   const isOwnerEdSecretSet = import.meta.env.VITE_OWNER_ED_SECRET;
   // --- Persistence ---
@@ -120,20 +153,26 @@ function App() {
   const [initialContent, setInitialContent] = useState<string | undefined>(
     () => docStore.getContent(docId) || undefined,
   );
-  // No local copy — try restoring the latest version from Swarm before the
-  // editor mounts (e.g. same document opened in another browser).
+  // Restore from Swarm before the editor mounts: always when viewing a
+  // pinned historical version, otherwise only when there is no local copy
+  // (e.g. same document opened in another browser).
   const [swarmRestoring, setSwarmRestoring] = useState(
-    () => swarmEnabled && !docStore.getContent(docId),
+    () =>
+      swarmEnabled && (viewingVersion !== null || !docStore.getContent(docId)),
   );
   useEffect(() => {
     if (!swarmRestoring || !docStorage) return;
     let cancelled = false;
     (async () => {
       try {
-        const snapshot = await docStorage.loadDocument(docId);
+        const snapshot =
+          viewingVersion !== null
+            ? await docStorage.loadDocumentVersion(docId, viewingVersion)
+            : await docStorage.loadDocument(docId);
         if (cancelled) return;
         if (snapshot) {
           setInitialContent(snapshot.text);
+          viewedTextRef.current = snapshot.text;
           setSwarmStatus({ state: 'saved', version: snapshot.feedIndex });
           console.info(
             `Swarm: restored document version ${snapshot.feedIndex}`,
@@ -148,7 +187,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [swarmRestoring, docStorage, docId]);
+  }, [swarmRestoring, docStorage, docId, viewingVersion]);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const swarmSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -161,6 +200,8 @@ function App() {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       _updateChunk: string,
     ) => {
+      // Viewing a historical version: never overwrite local or Swarm state.
+      if (viewingVersion !== null) return;
       if (typeof updatedDocContent === 'string') {
         if (saveTimeoutRef.current) {
           clearTimeout(saveTimeoutRef.current);
@@ -195,7 +236,7 @@ function App() {
         }
       }
     },
-    [docId, docStorage],
+    [docId, docStorage, viewingVersion],
   );
 
   // --- Tab deep linking ---
@@ -621,25 +662,110 @@ function App() {
             {lastSavedAt ? 'Saved' : 'Not saved yet'}
           </Tag>
           {swarmStatus.state !== 'off' && (
-            <Tag
-              icon={swarmStatus.state === 'error' ? 'CircleAlert' : 'Globe'}
-              variant="transparent"
-              className="h-6 rounded border color-border-default color-text-secondary text-[12px] font-normal hidden xl:flex"
-              style={{ backgroundColor: 'hsl(var(--color-bg-secondary))' }}
-              title={
-                stampHealth
-                  ? `Postage stamp ${stampHealth.status} — ${Math.round(stampHealth.utilization * 100)}% full, expires ${stampHealth.expiresAt.toLocaleDateString()}`
-                  : undefined
-              }
-            >
-              {swarmStatus.state === 'saving' && 'Swarm: saving…'}
-              {swarmStatus.state === 'saved' &&
-                `Swarm: saved v${swarmStatus.version}`}
-              {swarmStatus.state === 'error' && 'Swarm: save failed'}
-              {stampHealth && stampHealth.status !== 'ok'
-                ? ` · stamp ${stampHealth.status}`
-                : ''}
-            </Tag>
+            <div className="relative hidden xl:block">
+              <button
+                type="button"
+                onClick={async () => {
+                  const open = !versionsOpen;
+                  setVersionsOpen(open);
+                  if (open && docStorage) {
+                    try {
+                      setVersionList(
+                        await docStorage.listDocumentVersions(docId),
+                      );
+                    } catch {
+                      setVersionList([]);
+                    }
+                  }
+                }}
+                className="h-6 rounded border color-border-default color-text-secondary text-[12px] font-normal flex items-center gap-1 px-2 cursor-pointer"
+                style={{ backgroundColor: 'hsl(var(--color-bg-secondary))' }}
+                title={
+                  (stampHealth
+                    ? `Postage stamp ${stampHealth.status} — ${Math.round(stampHealth.utilization * 100)}% full, expires ${stampHealth.expiresAt.toLocaleDateString()}. `
+                    : '') + 'Click for version history'
+                }
+              >
+                <SwarmIcon />
+                {viewingVersion !== null
+                  ? `Swarm: viewing v${viewingVersion}`
+                  : swarmStatus.state === 'saving'
+                    ? 'Swarm: saving…'
+                    : swarmStatus.state === 'saved'
+                      ? `Swarm: saved v${swarmStatus.version}`
+                      : 'Swarm: save failed'}
+                {stampHealth && stampHealth.status !== 'ok'
+                  ? ` · stamp ${stampHealth.status}`
+                  : ''}
+              </button>
+              {versionsOpen && (
+                <div
+                  className="absolute top-7 left-0 z-50 min-w-56 max-h-72 overflow-y-auto rounded border color-border-default color-bg-default shadow-elevation-3 text-[12px]"
+                  style={{ backgroundColor: 'hsl(var(--color-bg-default))' }}
+                >
+                  {viewingVersion !== null && (
+                    <>
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-2 hover:color-bg-secondary font-medium"
+                        onClick={async () => {
+                          if (docStorage && viewedTextRef.current) {
+                            await docStorage.saveDocument(
+                              docId,
+                              viewedTextRef.current,
+                            );
+                            docStore.setContent(docId, viewedTextRef.current);
+                          }
+                          gotoVersion(null);
+                        }}
+                      >
+                        ⤴ Restore v{viewingVersion} as latest
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-2 hover:color-bg-secondary"
+                        onClick={() => gotoVersion(null)}
+                      >
+                        ← Back to latest
+                      </button>
+                      <div className="border-t color-border-default" />
+                    </>
+                  )}
+                  {versionList === null && (
+                    <div className="px-3 py-2 color-text-secondary">
+                      Loading versions…
+                    </div>
+                  )}
+                  {versionList?.length === 0 && (
+                    <div className="px-3 py-2 color-text-secondary">
+                      No versions yet
+                    </div>
+                  )}
+                  {versionList
+                    ?.slice()
+                    .reverse()
+                    .map((v) => (
+                      <button
+                        key={v.index}
+                        type="button"
+                        className="w-full text-left px-3 py-2 hover:color-bg-secondary flex justify-between gap-3"
+                        onClick={() => gotoVersion(v.index)}
+                      >
+                        <span>
+                          v{v.index}
+                          {v.index === versionList[versionList.length - 1].index
+                            ? ' (latest)'
+                            : ''}
+                          {v.index === viewingVersion ? ' — viewing' : ''}
+                        </span>
+                        <span className="color-text-secondary">
+                          {new Date(v.timestamp * 1000).toLocaleString()}
+                        </span>
+                      </button>
+                    ))}
+                </div>
+              )}
+            </div>
           )}
           <div className="w-6 h-6 rounded color-bg-secondary flex justify-center items-center border color-border-default xl:hidden">
             <LucideIcon
