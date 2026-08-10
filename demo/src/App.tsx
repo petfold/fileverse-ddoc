@@ -6,6 +6,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
+import { createPortal } from 'react-dom';
 import DdocEditor from '../../package/ddoc-editor';
 import type { FontDescriptor } from '../../package/types';
 import { Editor, JSONContent } from '@tiptap/react';
@@ -46,6 +47,23 @@ import { collabStore } from './storage/collab-store';
 import { docStore } from './storage/doc-store';
 import { swarmEnabled, useSwarmStorage } from './storage/swarm-store';
 import { DocumentVersion } from '../../package/utils/swarm-document-storage';
+
+/**
+ * Swarm snapshot envelope: carries the document title alongside the content
+ * so a restore on another browser recovers both. Older raw-content
+ * snapshots (no envelope) still load.
+ */
+const packSnapshot = (title: string, content: string): string =>
+  JSON.stringify({ __ddoc: 1, title, content });
+const unpackSnapshot = (text: string): { title?: string; content: string } => {
+  try {
+    const v = JSON.parse(text);
+    if (v && v.__ddoc === 1 && typeof v.content === 'string') return v;
+  } catch {
+    // not an envelope — fall through
+  }
+  return { content: text };
+};
 
 /** Official Swarm mark (ethswarm.org), drawn in the current text color. */
 const SwarmIcon = () => (
@@ -138,6 +156,12 @@ function App() {
     null,
   );
   const [versionsOpen, setVersionsOpen] = useState(false);
+  // Dropdown rendered in a portal at a fixed position so no toolbar or
+  // navbar stacking context can cover it.
+  const [versionMenuPos, setVersionMenuPos] = useState<{
+    top: number;
+    left: number;
+  }>({ top: 0, left: 0 });
 
   const gotoVersion = (n: number | null) => {
     const url = new URL(window.location.href);
@@ -171,8 +195,17 @@ function App() {
             : await docStorage.loadDocument(docId);
         if (cancelled) return;
         if (snapshot) {
-          setInitialContent(snapshot.text);
+          const { title: restoredTitle, content } = unpackSnapshot(
+            snapshot.text,
+          );
+          setInitialContent(content);
           viewedTextRef.current = snapshot.text;
+          lastContentRef.current = content;
+          if (restoredTitle) {
+            setTitle(restoredTitle);
+            titleRef.current = restoredTitle;
+            docStore.updateDocTitle(docId, restoredTitle);
+          }
           setSwarmStatus({ state: 'saved', version: snapshot.feedIndex });
           console.info(
             `Swarm: restored document version ${snapshot.feedIndex}`,
@@ -192,6 +225,37 @@ function App() {
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const swarmSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
+  );
+  // Latest known title/content for Swarm envelopes (titles change without a
+  // content onChange, and vice versa).
+  const titleRef = useRef<string>('Untitled');
+  const lastContentRef = useRef<string | null>(docStore.getContent(docId));
+
+  const scheduleSwarmSave = useCallback(
+    (content: string) => {
+      if (!docStorage || viewingVersion !== null) return;
+      lastContentRef.current = content;
+      if (swarmSaveTimeoutRef.current) {
+        clearTimeout(swarmSaveTimeoutRef.current);
+      }
+      swarmSaveTimeoutRef.current = setTimeout(async () => {
+        setSwarmStatus({ state: 'saving' });
+        try {
+          const version = await docStorage.saveDocument(
+            docId,
+            packSnapshot(titleRef.current, content),
+          );
+          setSwarmStatus({ state: 'saved', version: version.index });
+        } catch (error) {
+          console.error('Swarm save failed', error);
+          setSwarmStatus({
+            state: 'error',
+            message: (error as Error).message,
+          });
+        }
+      }, 2000);
+    },
+    [docId, docStorage, viewingVersion],
   );
 
   const handleContentChange = useCallback(
@@ -213,30 +277,10 @@ function App() {
 
         // Swarm persistence: each (debounced) save is an immutable version
         // on the document's feed.
-        if (docStorage) {
-          if (swarmSaveTimeoutRef.current) {
-            clearTimeout(swarmSaveTimeoutRef.current);
-          }
-          swarmSaveTimeoutRef.current = setTimeout(async () => {
-            setSwarmStatus({ state: 'saving' });
-            try {
-              const version = await docStorage.saveDocument(
-                docId,
-                updatedDocContent,
-              );
-              setSwarmStatus({ state: 'saved', version: version.index });
-            } catch (error) {
-              console.error('Swarm save failed', error);
-              setSwarmStatus({
-                state: 'error',
-                message: (error as Error).message,
-              });
-            }
-          }, 2000);
-        }
+        scheduleSwarmSave(updatedDocContent);
       }
     },
-    [docId, docStorage, viewingVersion],
+    [docId, scheduleSwarmSave, viewingVersion],
   );
 
   // --- Tab deep linking ---
@@ -293,12 +337,23 @@ function App() {
     return doc?.title || 'Untitled';
   });
 
+  // Keep the Swarm envelope's title current (initial value + edits).
+  useEffect(() => {
+    titleRef.current = title;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleTitleChange = useCallback(
     (newTitle: string) => {
       setTitle(newTitle);
       docStore.updateDocTitle(docId, newTitle);
+      titleRef.current = newTitle;
+      // A title edit is a document change too — version it on Swarm.
+      if (lastContentRef.current) {
+        scheduleSwarmSave(lastContentRef.current);
+      }
     },
-    [docId],
+    [docId, scheduleSwarmSave],
   );
 
   // Document styling state - starts undefined to allow dark mode to work
@@ -671,7 +726,9 @@ function App() {
             <div className="relative hidden xl:block">
               <button
                 type="button"
-                onClick={async () => {
+                onClick={async (e) => {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  setVersionMenuPos({ top: rect.bottom + 4, left: rect.left });
                   const open = !versionsOpen;
                   setVersionsOpen(open);
                   if (open && docStorage) {
@@ -704,10 +761,16 @@ function App() {
                   ? ` · stamp ${stampHealth.status}`
                   : ''}
               </button>
-              {versionsOpen && (
+              {versionsOpen &&
+                createPortal(
                 <div
-                  className="absolute top-7 left-0 z-50 min-w-56 max-h-72 overflow-y-auto rounded border color-border-default color-bg-default shadow-elevation-3 text-[12px]"
-                  style={{ backgroundColor: 'hsl(var(--color-bg-default))' }}
+                  className="fixed min-w-56 max-h-72 overflow-y-auto rounded border color-border-default color-bg-default shadow-elevation-3 text-[12px]"
+                  style={{
+                    backgroundColor: 'hsl(var(--color-bg-default))',
+                    top: versionMenuPos.top,
+                    left: versionMenuPos.left,
+                    zIndex: 99999,
+                  }}
                 >
                   {viewingVersion !== null && (
                     <>
@@ -720,7 +783,13 @@ function App() {
                               docId,
                               viewedTextRef.current,
                             );
-                            docStore.setContent(docId, viewedTextRef.current);
+                            const restored = unpackSnapshot(
+                              viewedTextRef.current,
+                            );
+                            docStore.setContent(docId, restored.content);
+                            if (restored.title) {
+                              docStore.updateDocTitle(docId, restored.title);
+                            }
                           }
                           gotoVersion(null);
                         }}
@@ -769,7 +838,8 @@ function App() {
                         </span>
                       </button>
                     ))}
-                </div>
+                </div>,
+                document.body,
               )}
             </div>
           )}
