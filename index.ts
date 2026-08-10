@@ -63,5 +63,24 @@ export {
   createSwarmImageFetchFn,
 } from './package/utils/swarm-storage';
 export type { SwarmStorageConfig } from './package/utils/swarm-storage';
+export {
+  createSwarmDocumentStorage,
+  generateDocumentKey,
+  makeDocumentFeedTopic,
+} from './package/utils/swarm-document-storage';
+export type {
+  SwarmDocumentStorage,
+  SwarmDocumentStorageConfig,
+  DocumentSnapshot,
+  DocumentVersion,
+} from './package/utils/swarm-document-storage';
+export {
+  makeFeedTopic,
+  writeFeedUpdate,
+  readLatestFeedIndex,
+  readFeedUpdate,
+  feedOwnerAddress,
+} from './package/utils/swarm-feeds';
+export type { SwarmFeedConfig } from './package/utils/swarm-feeds';
 export type { IComment } from './package/extensions/comment/comment.ts';
 export type { FontDescriptor } from './package/types';
