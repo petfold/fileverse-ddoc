@@ -1,6 +1,6 @@
 # dDocs Editor
-[ddocs.new](http://ddocs.new/) is your privacy-first, open-source alternative to Google Docs. A self-sovereign document editor for multiplayer collaboration that is end-to-end encrypted, decentralised, and requires no account to get started 💛
 
+[ddocs.new](http://ddocs.new/) is your privacy-first, open-source alternative to Google Docs. A self-sovereign document editor for multiplayer collaboration that is end-to-end encrypted, decentralised, and requires no account to get started 💛
 
 dDocs enables secure, real-time and asynchronous collaboration without compromising user privacy. Powerful features include:
 
@@ -40,8 +40,8 @@ To use dDocs, ensure your project is set up with Tailwind CSS and have a Tailwin
 Add the following imports :
 
 ```javascript
-import { DdocEditor } from '@fileverse-dev/ddoc';
-import '@fileverse-dev/ddoc/styles'; // in App.jsx/App.tsx
+import { DdocEditor } from "@fileverse-dev/ddoc";
+import "@fileverse-dev/ddoc/styles"; // in App.jsx/App.tsx
 ```
 
 ### Peer Dependencies
@@ -104,18 +104,18 @@ The `DdocProps` interface is a TypeScript interface that defines the properties 
 
 ## UI/UX Props
 
-| Property                | Type                                      | Description                            |
-| ----------------------- | ----------------------------------------- | -------------------------------------- |
-| `zoomLevel`             | `string`                                  | Current zoom level of the editor       |
-| `setZoomLevel`          | `React.Dispatch<SetStateAction<string>>`  | Function to update zoom level          |
-| `isNavbarVisible`       | `boolean`                                 | Controls navbar visibility             |
-| `setIsNavbarVisible`    | `React.Dispatch<SetStateAction<boolean>>` | Function to toggle navbar visibility   |
-| `renderNavbar`          | `() => JSX.Element`                       | Custom navbar renderer                 |
-| `renderThemeToggle`     | `() => JSX.Element`                       | Custom theme toggle renderer           |
-| `isPresentationMode`    | `boolean`                                 | Controls presentation mode             |
-| `setIsPresentationMode` | `React.Dispatch<SetStateAction<boolean>>` | Function to toggle presentation mode   |
-| `sharedSlidesLink`      | `string`                                  | Link for shared presentation slides    |
-| `documentStyling`       | `DocumentStyling`                         | Custom styling for document appearance |
+| Property                | Type                                      | Description                                       |
+| ----------------------- | ----------------------------------------- | ------------------------------------------------- |
+| `zoomLevel`             | `string`                                  | Current zoom level of the editor                  |
+| `setZoomLevel`          | `React.Dispatch<SetStateAction<string>>`  | Function to update zoom level                     |
+| `isNavbarVisible`       | `boolean`                                 | Controls navbar visibility                        |
+| `setIsNavbarVisible`    | `React.Dispatch<SetStateAction<boolean>>` | Function to toggle navbar visibility              |
+| `renderNavbar`          | `() => JSX.Element`                       | Custom navbar renderer                            |
+| `renderThemeToggle`     | `() => JSX.Element`                       | Custom theme toggle renderer                      |
+| `isPresentationMode`    | `boolean`                                 | Controls presentation mode                        |
+| `setIsPresentationMode` | `React.Dispatch<SetStateAction<boolean>>` | Function to toggle presentation mode              |
+| `sharedSlidesLink`      | `string`                                  | Link for shared presentation slides               |
+| `documentStyling`       | `DocumentStyling`                         | Custom styling for document appearance            |
 | `fonts`                 | `FontDescriptor[]`                        | Consumer-provided font catalog (see Custom Fonts) |
 
 ## Document Styling
@@ -163,12 +163,12 @@ interface DocumentStyling {
 <DdocEditor
   documentStyling={{
     background: {
-      light: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      dark: 'linear-gradient(135deg, #2a3145 0%, #3a2f59 100%)',
+      light: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+      dark: "linear-gradient(135deg, #2a3145 0%, #3a2f59 100%)",
     },
-    canvasBackground: { light: '#ffffff', dark: '#1e1f22' },
-    textColor: { light: '#333333', dark: '#e8ebec' },
-    fontFamily: 'Inter, sans-serif',
+    canvasBackground: { light: "#ffffff", dark: "#1e1f22" },
+    textColor: { light: "#333333", dark: "#e8ebec" },
+    fontFamily: "Inter, sans-serif",
   }}
   // ... other props
 />
@@ -203,15 +203,15 @@ type FontDescriptor = {
 ### Usage Example
 
 ```tsx
-import { DdocEditor, FontDescriptor } from '@fileverse-dev/ddoc';
+import { DdocEditor, FontDescriptor } from "@fileverse-dev/ddoc";
 // Self-host the woff2 files however your bundler prefers (e.g. @fontsource/*).
-import poppins400 from '@fontsource/poppins/files/poppins-latin-400-normal.woff2';
-import poppins700 from '@fontsource/poppins/files/poppins-latin-700-normal.woff2';
+import poppins400 from "@fontsource/poppins/files/poppins-latin-400-normal.woff2";
+import poppins700 from "@fontsource/poppins/files/poppins-latin-700-normal.woff2";
 
 const fonts: FontDescriptor[] = [
   {
-    name: 'Poppins',
-    family: 'Poppins, sans-serif',
+    name: "Poppins",
+    family: "Poppins, sans-serif",
     url: { 400: poppins400, 700: poppins700 },
     preview: <PoppinsPreview />, // optional SVG
   },
@@ -254,21 +254,23 @@ const fonts: FontDescriptor[] = [
 
 ## Utility Props
 
-| Property            | Type                                                                     | Description                               |
-| ------------------- | ------------------------------------------------------------------------ | ----------------------------------------- |
-| `setCharacterCount` | `React.Dispatch<SetStateAction<number>>`                                 | Updates character count                   |
-| `setWordCount`      | `React.Dispatch<SetStateAction<number>>`                                 | Updates word count                        |
-| `setPageCount`      | `React.Dispatch<SetStateAction<number>>`                                 | Updates approx. export page count         |
-| `ensResolutionUrl`  | `string`                                                                 | URL for ENS name resolution               |
-| `ipfsImageUploadFn` | ` (file: File) => Promise<IpfsImageUploadResponse>`                      | function for secure image uploads         |
-| `ipfsImageFetchFn`  | ` (_data: IpfsImageFetchPayload) => Promise<{ url: string;file: File;}>` | function for fetch secure image from IPFS |
-| `onError`           | `(error: string) => void`                                                | General error handler                     |
-| `onInlineComment`   | `() => void`                                                             | Callback for inline comments              |
-| `onMarkdownExport`  | `() => void`                                                             | Callback for markdown export              |
-| `onMarkdownImport`  | `() => void`                                                             | Callback for markdown import              |
-| `onPdfExport`       | `() => void`                                                             | Callback for pdf export                   |
-| `onSlidesShare`     | `() => void`                                                             | Callback for slides sharing               |
-| `onComment`         | `() => void`                                                             | General comment callback                  |
+| Property            | Type                                                                        | Description                                                                                         |
+| ------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `setCharacterCount` | `React.Dispatch<SetStateAction<number>>`                                    | Updates character count                                                                             |
+| `setWordCount`      | `React.Dispatch<SetStateAction<number>>`                                    | Updates word count                                                                                  |
+| `setPageCount`      | `React.Dispatch<SetStateAction<number>>`                                    | Updates approx. export page count                                                                   |
+| `ensResolutionUrl`  | `string`                                                                    | URL for ENS name resolution                                                                         |
+| `imageUploadFn`     | ` (file: File) => Promise<StorageImageUploadResponse>`                      | Storage-agnostic secure image upload (IPFS, Swarm, ...) — see [Storage backends](#storage-backends) |
+| `imageFetchFn`      | ` (_data: StorageImageFetchPayload) => Promise<{ url: string;file: File;}>` | Storage-agnostic secure image fetch                                                                 |
+| `ipfsImageUploadFn` | ` (file: File) => Promise<IpfsImageUploadResponse>`                         | Deprecated — use `imageUploadFn`                                                                    |
+| `ipfsImageFetchFn`  | ` (_data: IpfsImageFetchPayload) => Promise<{ url: string;file: File;}>`    | Deprecated — use `imageFetchFn`                                                                     |
+| `onError`           | `(error: string) => void`                                                   | General error handler                                                                               |
+| `onInlineComment`   | `() => void`                                                                | Callback for inline comments                                                                        |
+| `onMarkdownExport`  | `() => void`                                                                | Callback for markdown export                                                                        |
+| `onMarkdownImport`  | `() => void`                                                                | Callback for markdown import                                                                        |
+| `onPdfExport`       | `() => void`                                                                | Callback for pdf export                                                                             |
+| `onSlidesShare`     | `() => void`                                                                | Callback for slides sharing                                                                         |
+| `onComment`         | `() => void`                                                                | General comment callback                                                                            |
 
 ## AI Writer Props
 
@@ -277,6 +279,108 @@ const fonts: FontDescriptor[] = [
 | `activeModel`      | `CustomModel` | Currently selected AI model for text generation |
 | `maxTokens`        | `number`      | Maximum token limit for AI-generated content    |
 | `isAIAgentEnabled` | `boolean`     | Toggle for AI agent functionality               |
+
+# Storage backends
+
+The editor never talks to a storage network itself — the host app **selects the
+backend by the functions it injects**. `imageUploadFn` / `imageFetchFn` decide
+where images live; wiring `onChange` / `initialContent` to a storage client
+decides where the document itself lives. The editor treats the returned
+`url` + `contentRef` as opaque, stores them in the document, and hands them
+back on fetch — so IPFS, Ethereum Swarm, or anything content-addressed works.
+
+Images are always encrypted client-side (AES-256-GCM); storage nodes only
+ever see ciphertext.
+
+## Ethereum Swarm
+
+Ready-made [Ethereum Swarm](https://www.ethswarm.org/) implementations ship
+with the package, built directly on the [Bee](https://github.com/ethersphere/bee)
+HTTP API with no extra dependencies. You need a Bee node (or gateway) and a
+usable postage batch.
+
+### Images on Swarm
+
+```tsx
+import {
+  DdocEditor,
+  createSwarmImageUploadFn,
+  createSwarmImageFetchFn,
+} from "@fileverse-dev/ddoc";
+
+const swarm = {
+  beeUrl: "http://localhost:1633",
+  postageBatchId: "<your batch id>",
+};
+
+<DdocEditor
+  imageUploadFn={createSwarmImageUploadFn(swarm)}
+  imageFetchFn={createSwarmImageFetchFn(swarm)}
+  /* ... */
+/>;
+```
+
+### Documents on Swarm (with version history)
+
+`createSwarmDocumentStorage` persists documents as encrypted, content-addressed
+snapshots on `/bytes`, with a [Swarm feed](https://docs.ethswarm.org/docs/develop/tools-and-features/feeds)
+as the mutable "latest" pointer. Every save is an immutable version; feed
+indices double as version history.
+
+```tsx
+import {
+  createSwarmDocumentStorage,
+  generateDocumentKey,
+} from "@fileverse-dev/ddoc";
+import { generatePrivateKey } from "viem/accounts";
+
+const storage = createSwarmDocumentStorage({
+  beeUrl: "http://localhost:1633",
+  postageBatchId: "<your batch id>",
+  ownerPrivateKey: generatePrivateKey(), // persist this — it owns the feed
+  documentKey: generateDocumentKey(), // persist this — omit for public docs
+});
+
+// Wire to the editor (debounce onChange as needed):
+await storage.saveDocument(ddocId, JSON.stringify(content)); // → { index, timestamp, reference }
+const latest = await storage.loadDocument(ddocId); // → snapshot | null
+const v1 = await storage.loadDocumentVersion(ddocId, 1);
+const versions = await storage.listDocumentVersions(ddocId);
+```
+
+Feeds are signed with an ordinary Ethereum key (personal-sign format), so a
+wallet key can own them; use a dedicated key if the wallet shouldn't sign
+storage updates silently. Sequence feeds are single-writer: concurrent saves
+of the same document race on the next index (last write wins).
+
+Lower-level feed primitives (`makeFeedTopic`, `writeFeedUpdate`,
+`readFeedUpdate`, `readLatestFeedIndex`) are exported too, and are
+wire-compatible with bee-js feeds.
+
+### Postage stamp management
+
+Swarm uploads are paid with postage batches that have a capacity and a
+lifetime — a full or expired batch makes uploads fail. Helpers are included
+to watch batch health and act in time:
+
+```ts
+import {
+  checkStampHealth,
+  topUpStamp,
+  diluteStamp,
+  buyStamp,
+} from "@fileverse-dev/ddoc";
+
+const health = await checkStampHealth({ beeUrl }, batchId);
+// health.status: 'ok' | 'expiring' | 'nearly-full' | 'unusable'
+if (health.status === "expiring")
+  await topUpStamp({ beeUrl }, batchId, "1000000000");
+if (health.status === "nearly-full") await diluteStamp({ beeUrl }, batchId, 21);
+```
+
+`buyStamp`, `topUpStamp` and `diluteStamp` spend xBZZ from the Bee node's
+wallet and settle on-chain. For local development, `bee dev` provides an
+in-memory node with free stamps.
 
 ### Steps to run this example locally
 
