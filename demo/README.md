@@ -18,3 +18,18 @@ The first usable postage batch on the node is auto-discovered; pin a
 specific one with `VITE_SWARM_POSTAGE_BATCH_ID=<batch id>`. For local
 development without a full node, `bee dev` provides an in-memory node with
 free stamps.
+
+## Hosting the demo itself on Swarm
+
+The demo is a static bundle, so the *app* can live on Swarm alongside the
+data — no web server at all:
+
+```bash
+./deploy-swarm.sh
+```
+
+This builds with relative paths, uploads the bundle as a Swarm website
+(manifest + index document) and prints a `/bzz/<reference>/` URL served by
+your Bee node. App code, images, document snapshots and version history
+then all come from the Swarm network. Point an ENS `contenthash` (or a
+feed) at the reference for a stable, human-readable address.
