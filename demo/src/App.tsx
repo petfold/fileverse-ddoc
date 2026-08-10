@@ -44,6 +44,7 @@ import { fromUint8Array } from 'js-base64';
 import { crypto as cryptoUtils } from './crypto';
 import { collabStore } from './storage/collab-store';
 import { docStore } from './storage/doc-store';
+import { useSwarmImageStorage } from './storage/swarm-store';
 import { DocumentStylingPanel } from './DocumentStylingPanel';
 import {
   DocumentStyling,
@@ -100,6 +101,10 @@ function App() {
   });
 
   const urlTabId = getTabIdFromURL();
+
+  // Swarm image storage — active when VITE_BEE_API_URL is set (see
+  // storage/swarm-store.ts); otherwise images stay inline.
+  const { imageUploadFn, imageFetchFn } = useSwarmImageStorage();
 
   const isOwnerEdSecretSet = import.meta.env.VITE_OWNER_ED_SECRET;
   // --- Persistence ---
@@ -828,6 +833,8 @@ function App() {
       />
       <DdocEditor
         ref={editorRef}
+        imageUploadFn={imageUploadFn}
+        imageFetchFn={imageFetchFn}
         fonts={demoFonts}
         collaboration={collaboration}
         username={username}
