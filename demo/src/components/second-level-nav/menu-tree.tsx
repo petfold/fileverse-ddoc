@@ -106,6 +106,14 @@ export const demoMenuTree: MenuBarTree = [
       },
       { id: 'file.sep2', kind: 'separator' },
       {
+        id: 'file.versionHistory',
+        kind: 'action',
+        label: 'Version history (Swarm)',
+        icon: 'History',
+        action: 'file.versionHistory',
+      },
+      { id: 'file.sep3', kind: 'separator' },
+      {
         id: 'file.print',
         kind: 'action',
         label: 'Print',

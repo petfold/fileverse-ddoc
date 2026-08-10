@@ -170,6 +170,24 @@ function App() {
     window.location.href = url.toString();
   };
 
+  const swarmTagRef = useRef<HTMLButtonElement | null>(null);
+  const openVersionHistory = useCallback(async () => {
+    if (!docStorage) return;
+    // Anchor under the Swarm tag when visible, else under the navbar.
+    const rect = swarmTagRef.current?.getBoundingClientRect();
+    setVersionMenuPos(
+      rect
+        ? { top: rect.bottom + 4, left: rect.left }
+        : { top: 56, left: window.innerWidth / 2 - 120 },
+    );
+    setVersionsOpen((open) => !open);
+    try {
+      setVersionList(await docStorage.listDocumentVersions(docId));
+    } catch {
+      setVersionList([]);
+    }
+  }, [docStorage, docId]);
+
   const isOwnerEdSecretSet = import.meta.env.VITE_OWNER_ED_SECRET;
   // --- Persistence ---
   // Use undefined (not null) when no saved content — null has special meaning
@@ -686,6 +704,7 @@ function App() {
       documentStyling,
       setDocumentStyling,
       startPresentation: () => setIsPresentationMode(true),
+      openVersionHistory,
     });
 
     return (
@@ -726,21 +745,8 @@ function App() {
             <div className="relative hidden xl:block">
               <button
                 type="button"
-                onClick={async (e) => {
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  setVersionMenuPos({ top: rect.bottom + 4, left: rect.left });
-                  const open = !versionsOpen;
-                  setVersionsOpen(open);
-                  if (open && docStorage) {
-                    try {
-                      setVersionList(
-                        await docStorage.listDocumentVersions(docId),
-                      );
-                    } catch {
-                      setVersionList([]);
-                    }
-                  }
-                }}
+                ref={swarmTagRef}
+                onClick={openVersionHistory}
                 className="h-6 rounded border color-border-default color-text-secondary text-[12px] font-normal flex items-center gap-1 px-2 cursor-pointer"
                 style={{ backgroundColor: 'hsl(var(--color-bg-secondary))' }}
                 title={
