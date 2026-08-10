@@ -35,13 +35,45 @@ const pinnedBatch: string | undefined = import.meta.env
 /** Whether Swarm storage is configured (sync, before any probing). */
 export const swarmEnabled = Boolean(beeUrl);
 
-const persistedKey = (storageKey: string, generate: () => string): string => {
-  let value = localStorage.getItem(storageKey);
-  if (!value) {
-    value = generate();
-    localStorage.setItem(storageKey, value);
+/**
+ * Key resolution: URL fragment first (so a copied link carries the keys to
+ * another browser/private window — the fragment never leaves the browser),
+ * then localStorage; generated on first use. The fragment is kept in sync
+ * so the address bar URL is always shareable.
+ */
+const readHashKeys = (): { owner: string; doc: string } | null => {
+  const match = window.location.hash.match(/skey=([^:]+):([^&]+)/);
+  return match
+    ? {
+        owner: decodeURIComponent(match[1]),
+        doc: decodeURIComponent(match[2]),
+      }
+    : null;
+};
+
+const writeHashKeys = (owner: string, doc: string) => {
+  const skey = `skey=${encodeURIComponent(owner)}:${encodeURIComponent(doc)}`;
+  if (!window.location.hash.includes(skey)) {
+    window.history.replaceState(null, '', `#${skey}`);
   }
-  return value;
+};
+
+const resolveKeys = (
+  docId: string,
+  generateOwner: () => string,
+  generateDoc: () => string,
+): { owner: string; doc: string } => {
+  const ownerStorageKey = 'ddoc-swarm-owner-key';
+  const docStorageKey = `ddoc-swarm-doc-key-${docId}`;
+  const fromHash = readHashKeys();
+  const owner =
+    fromHash?.owner ?? localStorage.getItem(ownerStorageKey) ?? generateOwner();
+  const doc =
+    fromHash?.doc ?? localStorage.getItem(docStorageKey) ?? generateDoc();
+  localStorage.setItem(ownerStorageKey, owner);
+  localStorage.setItem(docStorageKey, doc);
+  writeHashKeys(owner, doc);
+  return { owner, doc };
 };
 
 export const useSwarmStorage = (docId: string) => {
@@ -79,15 +111,11 @@ export const useSwarmStorage = (docId: string) => {
 
   const docStorage: SwarmDocumentStorage | null = useMemo(() => {
     if (!config) return null;
+    const keys = resolveKeys(docId, generatePrivateKey, generateDocumentKey);
     return createSwarmDocumentStorage({
       ...config,
-      ownerPrivateKey: persistedKey('ddoc-swarm-owner-key', () =>
-        generatePrivateKey(),
-      ) as `0x${string}`,
-      documentKey: persistedKey(
-        `ddoc-swarm-doc-key-${docId}`,
-        generateDocumentKey,
-      ),
+      ownerPrivateKey: keys.owner as `0x${string}`,
+      documentKey: keys.doc,
     });
   }, [config, docId]);
 
