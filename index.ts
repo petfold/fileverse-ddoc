@@ -58,5 +58,10 @@ export {
   resolveImageUploadFn,
   resolveImageFetchFn,
 } from './package/utils/storage-adapter';
+export {
+  createSwarmImageUploadFn,
+  createSwarmImageFetchFn,
+} from './package/utils/swarm-storage';
+export type { SwarmStorageConfig } from './package/utils/swarm-storage';
 export type { IComment } from './package/extensions/comment/comment.ts';
 export type { FontDescriptor } from './package/types';
