@@ -1,0 +1,187 @@
+/**
+ * Postage stamp management for the Swarm storage adapters.
+ *
+ * Swarm uploads are paid for with postage batches ("stamps") that have both
+ * a capacity (depth) and a lifetime (TTL, refillable). Unlike IPFS pinning,
+ * a batch that fills up or expires makes uploads fail — hosts should watch
+ * batch health and top up / dilute in time. These helpers wrap the Bee API's
+ * stamp endpoints so hosts can do exactly that.
+ *
+ * Note: `buyStamp`, `topUpStamp` and `diluteStamp` spend xBZZ from the Bee
+ * node's wallet and settle on-chain — they can take a while and are not
+ * idempotent. The read-only helpers are free.
+ */
+
+export interface SwarmNodeConfig {
+  /** Base URL of the Bee node API, e.g. `http://localhost:1633`. */
+  beeUrl: string;
+  /** Extra headers sent with every request (e.g. gateway auth). */
+  headers?: Record<string, string>;
+}
+
+/** A postage batch as reported by `GET /stamps`. */
+export interface PostageStamp {
+  batchID: string;
+  utilization: number;
+  /** Fraction of capacity used (0..1). Present on Bee ≥ 2.6. */
+  utilizationRatio?: number;
+  usable: boolean;
+  label: string;
+  depth: number;
+  amount: string;
+  bucketDepth: number;
+  blockNumber: number;
+  immutableFlag: boolean;
+  exists: boolean;
+  /** Remaining lifetime in seconds. */
+  batchTTL: number;
+}
+
+export interface StampHealthThresholds {
+  /** Warn when remaining TTL drops below this many seconds. Default 7 days. */
+  minTtlSeconds?: number;
+  /** Warn when utilization exceeds this fraction. Default 0.9. */
+  maxUtilization?: number;
+}
+
+export interface StampHealth {
+  batchID: string;
+  usable: boolean;
+  /** Fraction of capacity used (0..1). */
+  utilization: number;
+  /** Remaining lifetime in seconds. */
+  ttlSeconds: number;
+  expiresAt: Date;
+  /**
+   * `ok` — healthy; `expiring` — TTL below threshold (top up!);
+   * `nearly-full` — utilization above threshold (dilute or buy a new
+   * batch); `unusable` — Bee reports the batch as not usable (still
+   * propagating, expired, or unknown).
+   */
+  status: 'ok' | 'expiring' | 'nearly-full' | 'unusable';
+}
+
+const DEFAULT_MIN_TTL_SECONDS = 7 * 24 * 60 * 60;
+const DEFAULT_MAX_UTILIZATION = 0.9;
+
+const stripTrailingSlash = (url: string) => url.replace(/\/+$/, '');
+
+const request = async (
+  config: SwarmNodeConfig,
+  path: string,
+  method: 'GET' | 'POST' | 'PATCH' = 'GET',
+) => {
+  const response = await fetch(`${stripTrailingSlash(config.beeUrl)}${path}`, {
+    method,
+    headers: config.headers,
+  });
+  if (!response.ok) {
+    throw new Error(
+      `Bee stamp request ${method} ${path} failed: ${response.status} ${await response.text()}`,
+    );
+  }
+  return response.json();
+};
+
+/** All postage batches owned by this Bee node. */
+export const listStamps = async (
+  config: SwarmNodeConfig,
+): Promise<PostageStamp[]> => {
+  const { stamps } = (await request(config, '/stamps')) as {
+    stamps: PostageStamp[] | null;
+  };
+  return stamps ?? [];
+};
+
+/** One postage batch by ID. */
+export const getStamp = (
+  config: SwarmNodeConfig,
+  batchId: string,
+): Promise<PostageStamp> =>
+  request(config, `/stamps/${batchId}`) as Promise<PostageStamp>;
+
+/** Utilization fraction, falling back to bucket math on older Bee. */
+export const stampUtilization = (stamp: PostageStamp): number =>
+  stamp.utilizationRatio ??
+  stamp.utilization / 2 ** (stamp.depth - stamp.bucketDepth);
+
+/**
+ * Assess a batch against expiry/capacity thresholds so hosts can surface
+ * "top up your stamp" warnings before uploads start failing.
+ */
+export const checkStampHealth = async (
+  config: SwarmNodeConfig,
+  batchId: string,
+  thresholds: StampHealthThresholds = {},
+): Promise<StampHealth> => {
+  const stamp = await getStamp(config, batchId);
+  const minTtl = thresholds.minTtlSeconds ?? DEFAULT_MIN_TTL_SECONDS;
+  const maxUtilization = thresholds.maxUtilization ?? DEFAULT_MAX_UTILIZATION;
+  const utilization = stampUtilization(stamp);
+
+  let status: StampHealth['status'] = 'ok';
+  if (!stamp.usable) status = 'unusable';
+  else if (stamp.batchTTL >= 0 && stamp.batchTTL < minTtl) status = 'expiring';
+  else if (utilization > maxUtilization) status = 'nearly-full';
+
+  return {
+    batchID: stamp.batchID,
+    usable: stamp.usable,
+    utilization,
+    ttlSeconds: stamp.batchTTL,
+    expiresAt: new Date(Date.now() + stamp.batchTTL * 1000),
+    status,
+  };
+};
+
+/**
+ * Buy a new postage batch (spends xBZZ, settles on-chain). `amount` is the
+ * per-chunk balance in PLUR (drives TTL), `depth` the capacity (2^depth
+ * chunks of 4KB). Returns the new batch ID; the batch may need a few
+ * blocks before `usable` turns true.
+ */
+export const buyStamp = async (
+  config: SwarmNodeConfig,
+  options: { amount: string; depth: number; label?: string },
+): Promise<string> => {
+  const label = options.label
+    ? `?label=${encodeURIComponent(options.label)}`
+    : '';
+  const { batchID } = (await request(
+    config,
+    `/stamps/${options.amount}/${options.depth}${label}`,
+    'POST',
+  )) as { batchID: string };
+  return batchID;
+};
+
+/** Extend a batch's TTL by adding `amount` PLUR per chunk (spends xBZZ). */
+export const topUpStamp = async (
+  config: SwarmNodeConfig,
+  batchId: string,
+  amount: string,
+): Promise<string> => {
+  const { batchID } = (await request(
+    config,
+    `/stamps/topup/${batchId}/${amount}`,
+    'PATCH',
+  )) as { batchID: string };
+  return batchID;
+};
+
+/**
+ * Increase a batch's capacity by raising its depth (this also shortens its
+ * TTL proportionally — consider a top-up alongside).
+ */
+export const diluteStamp = async (
+  config: SwarmNodeConfig,
+  batchId: string,
+  depth: number,
+): Promise<string> => {
+  const { batchID } = (await request(
+    config,
+    `/stamps/dilute/${batchId}/${depth}`,
+    'PATCH',
+  )) as { batchID: string };
+  return batchID;
+};

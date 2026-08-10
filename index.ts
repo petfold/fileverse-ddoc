@@ -82,5 +82,20 @@ export {
   feedOwnerAddress,
 } from './package/utils/swarm-feeds';
 export type { SwarmFeedConfig } from './package/utils/swarm-feeds';
+export {
+  listStamps,
+  getStamp,
+  stampUtilization,
+  checkStampHealth,
+  buyStamp,
+  topUpStamp,
+  diluteStamp,
+} from './package/utils/swarm-stamps';
+export type {
+  SwarmNodeConfig,
+  PostageStamp,
+  StampHealth,
+  StampHealthThresholds,
+} from './package/utils/swarm-stamps';
 export type { IComment } from './package/extensions/comment/comment.ts';
 export type { FontDescriptor } from './package/types';
