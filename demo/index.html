@@ -6,10 +6,59 @@
   <link rel="icon" type="image/svg+xml" href="/vite.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
     <title>Demo - Ddoc Editor - Fileverse</title>
+  <style>
+    /* Boot screen: replaced by React on mount. Served from Swarm the app
+       bundle arrives chunk by chunk over the network, which on a cold node
+       or a slow link takes a while — show that something is happening
+       instead of a blank page. */
+    #boot {
+      font: 14px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+      color: #6b655d;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 6rem 1.5rem;
+      text-align: center;
+    }
+    #boot svg { color: #dd6b00; animation: boot-pulse 1.8s ease-in-out infinite; }
+    #boot .elapsed { font-variant-numeric: tabular-nums; font-size: 12px; }
+    #boot .slow { max-width: 32rem; font-size: 12px; }
+    @keyframes boot-pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.35 } }
+    @media (prefers-reduced-motion: reduce) { #boot svg { animation: none } }
+    @media (prefers-color-scheme: dark) { #boot { color: #a39b8f } }
+  </style>
 </head>
 
 <body>
-  <div id="root"></div>
+  <div id="root">
+    <div id="boot">
+      <svg viewBox="0 0 1115 1115" width="34" height="34" fill="currentColor" aria-hidden="true">
+        <path d="M0 665.01V965l260 150 260-150.01V664.96L260 515 0 665.01zM855 515 595 665v299.99L855 1115l260-150.01V664.95L855 515zM817.32 300.27l-129.91-75.25-.13-149.98L557.5 0 297.68 150.01V450L557.5 600l259.82-150V300.27z"/>
+        <path d="m817.32 300.27 129.91-75.3V75L817.52 0 687.28 75.04l130.24 74.83-.2 150.4z"/>
+      </svg>
+      <div>Loading the editor…</div>
+      <div class="elapsed" id="boot-elapsed"></div>
+      <div class="slow" id="boot-slow" hidden>
+        First load fetches several MB of app code. Served from Swarm, a node
+        that has not cached these chunks retrieves them from the network —
+        slow links make this take a few minutes. Later loads are fast.
+      </div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var started = Date.now();
+      var elapsed = document.getElementById('boot-elapsed');
+      var slow = document.getElementById('boot-slow');
+      var timer = setInterval(function () {
+        if (!document.getElementById('boot')) return clearInterval(timer);
+        var s = Math.floor((Date.now() - started) / 1000);
+        elapsed.textContent = s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + ('0' + (s % 60)).slice(-2) + 's';
+        if (s > 8) slow.hidden = false;
+      }, 500);
+    })();
+  </script>
   <script type="module" src="/src/main.tsx"></script>
 </body>
 
