@@ -65,9 +65,16 @@ export {
 export type { SwarmStorageConfig } from './package/utils/swarm-storage';
 export {
   createSwarmDocumentStorage,
+  canSaveToSwarm,
   generateDocumentKey,
   makeDocumentFeedTopic,
 } from './package/utils/swarm-document-storage';
+export { SwarmTimeoutError } from './package/utils/swarm-common';
+export type {
+  SwarmProgress,
+  SwarmProgressHandler,
+  SwarmRequestConfig,
+} from './package/utils/swarm-common';
 export type {
   SwarmDocumentStorage,
   SwarmDocumentStorageConfig,

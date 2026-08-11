@@ -10,14 +10,14 @@
  * Note: `buyStamp`, `topUpStamp` and `diluteStamp` spend xBZZ from the Bee
  * node's wallet and settle on-chain — they can take a while and are not
  * idempotent. The read-only helpers are free.
+ *
+ * Stamps pay for *uploads only*. A node with no batch can still read
+ * everything on Swarm, so hosts should treat a missing batch as "read-only
+ * here", not as "Swarm unavailable".
  */
+import { SwarmRequestConfig, swarmFetch } from './swarm-common';
 
-export interface SwarmNodeConfig {
-  /** Base URL of the Bee node API, e.g. `http://localhost:1633`. */
-  beeUrl: string;
-  /** Extra headers sent with every request (e.g. gateway auth). */
-  headers?: Record<string, string>;
-}
+export type SwarmNodeConfig = SwarmRequestConfig;
 
 /** A postage batch as reported by `GET /stamps`. */
 export interface PostageStamp {
@@ -63,22 +63,22 @@ export interface StampHealth {
 
 const DEFAULT_MIN_TTL_SECONDS = 7 * 24 * 60 * 60;
 const DEFAULT_MAX_UTILIZATION = 0.9;
-
-const stripTrailingSlash = (url: string) => url.replace(/\/+$/, '');
+/** Stamp endpoints answer from local node state — no network lookup. */
+const STAMP_TIMEOUT_MS = 10_000;
 
 const request = async (
   config: SwarmNodeConfig,
   path: string,
   method: 'GET' | 'POST' | 'PATCH' = 'GET',
 ) => {
-  const response = await fetch(`${stripTrailingSlash(config.beeUrl)}${path}`, {
+  const response = await swarmFetch(config, path, {
     method,
-    headers: config.headers,
+    // Buying/topping up settles on-chain and legitimately takes longer.
+    timeoutMs:
+      method === 'GET' ? STAMP_TIMEOUT_MS : (config.timeoutMs ?? 120_000),
   });
-  if (!response.ok) {
-    throw new Error(
-      `Bee stamp request ${method} ${path} failed: ${response.status} ${await response.text()}`,
-    );
+  if (response.status === 404) {
+    throw new Error(`Bee stamp request ${method} ${path} failed: not found`);
   }
   return response.json();
 };

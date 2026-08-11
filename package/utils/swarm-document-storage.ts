@@ -1,6 +1,5 @@
 import {
   SwarmFeedConfig,
-  concatBytes,
   feedOwnerAddress,
   makeFeedTopic,
   readFeedUpdate,
@@ -8,6 +7,15 @@ import {
   uint64BigEndian,
   writeFeedUpdate,
 } from './swarm-feeds';
+import {
+  bytesToHex,
+  concatBytes,
+  fromBase64,
+  hexToBytes,
+  readWithProgress,
+  swarmFetch,
+  toBase64,
+} from './swarm-common';
 
 /**
  * Document persistence on Ethereum Swarm.
@@ -47,6 +55,10 @@ export interface SwarmDocumentStorageConfig extends SwarmFeedConfig {
   documentKey?: string;
 }
 
+/** True when this storage can write — i.e. a postage batch is configured. */
+export const canSaveToSwarm = (config: SwarmDocumentStorageConfig): boolean =>
+  Boolean(config.postageBatchId);
+
 export interface DocumentSnapshot {
   /** Decrypted snapshot bytes as saved. */
   bytes: Uint8Array;
@@ -69,35 +81,8 @@ export interface DocumentVersion {
 const GCM_NONCE_BYTES = 12;
 const TIMESTAMP_BYTES = 8;
 
-const toBase64 = (bytes: Uint8Array): string => {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-};
-
-const fromBase64 = (value: string): Uint8Array<ArrayBuffer> => {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-};
-
-const hexToBytes = (hex: string): Uint8Array =>
-  new Uint8Array((hex.match(/../g) as string[]).map((b) => parseInt(b, 16)));
-
-const bytesToHex = (bytes: Uint8Array): string =>
-  Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-
 const readUint64BigEndian = (bytes: Uint8Array): number =>
   Number(new DataView(bytes.buffer, bytes.byteOffset, 8).getBigUint64(0));
-
-const stripTrailingSlash = (url: string) => url.replace(/\/+$/, '');
 
 /** Namespaced feed topic for one document. */
 export const makeDocumentFeedTopic = (ddocId: string): Uint8Array =>
@@ -131,7 +116,6 @@ const unseal = async (key: CryptoKey, blob: Uint8Array) => {
 export const createSwarmDocumentStorage = (
   config: SwarmDocumentStorageConfig,
 ) => {
-  const beeUrl = stripTrailingSlash(config.beeUrl);
   const ownerAddress = feedOwnerAddress(config.ownerPrivateKey);
   // Feed-index cache: `GET /feeds` on a live node resolves over the network
   // (seconds, and slowest when the feed does not exist yet), so only the
@@ -155,17 +139,18 @@ export const createSwarmDocumentStorage = (
     feedIndex: number,
     timestamp: number,
   ): Promise<DocumentSnapshot> => {
-    const response = await fetch(`${beeUrl}/bytes/${reference}`, {
-      headers: config.headers,
-    });
-    if (!response.ok) {
-      throw new Error(
-        `Snapshot download failed: ${response.status} ${response.statusText}`,
-      );
+    config.onProgress?.({ stage: 'download', status: 'start' });
+    const response = await swarmFetch(config, `/bytes/${reference}`);
+    if (response.status === 404) {
+      throw new Error(`Snapshot not found on Swarm: ${reference}`);
     }
-    let bytes = new Uint8Array(await response.arrayBuffer());
+    let bytes: Uint8Array = await readWithProgress(response, config.onProgress);
     const key = await cryptoKey('decrypt');
-    if (key) bytes = await unseal(key, bytes);
+    if (key) {
+      config.onProgress?.({ stage: 'decrypt', status: 'start' });
+      bytes = await unseal(key, bytes);
+      config.onProgress?.({ stage: 'decrypt', status: 'done' });
+    }
     return {
       bytes,
       text: new TextDecoder().decode(bytes),
@@ -195,26 +180,38 @@ export const createSwarmDocumentStorage = (
         typeof content === 'string'
           ? new TextEncoder().encode(content)
           : content;
+      if (!config.postageBatchId) {
+        throw new Error(
+          'Saving to Swarm needs a postage batch. This node has none, so the ' +
+            'document is read-only here (reading never needs a stamp).',
+        );
+      }
       const key = await cryptoKey('encrypt');
       const blob = key ? await seal(key, plaintext) : plaintext;
 
-      const response = await fetch(`${beeUrl}/bytes`, {
+      config.onProgress?.({
+        stage: 'upload',
+        status: 'start',
+        total: blob.length,
+      });
+      const response = await swarmFetch(config, '/bytes', {
         method: 'POST',
         headers: {
           'content-type': 'application/octet-stream',
-          ...(config.postageBatchId
-            ? { 'swarm-postage-batch-id': config.postageBatchId }
-            : {}),
-          ...config.headers,
+          'swarm-postage-batch-id': config.postageBatchId,
         },
         body: blob,
       });
-      if (!response.ok) {
-        throw new Error(
-          `Snapshot upload failed: ${response.status} ${response.statusText}`,
-        );
+      if (response.status === 404) {
+        throw new Error('Snapshot upload failed: node rejected the upload');
       }
       const { reference } = (await response.json()) as { reference: string };
+      config.onProgress?.({
+        stage: 'upload',
+        status: 'done',
+        loaded: blob.length,
+        total: blob.length,
+      });
 
       const topic = makeDocumentFeedTopic(ddocId);
       let index = nextIndexCache.get(ddocId);

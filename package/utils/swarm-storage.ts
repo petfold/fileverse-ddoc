@@ -1,4 +1,13 @@
 import { ImageFetchFn, ImageUploadFn } from '../types';
+import {
+  SwarmRequestConfig,
+  concatBytes,
+  fromBase64,
+  readWithProgress,
+  stripTrailingSlash,
+  swarmFetch,
+  toBase64,
+} from './swarm-common';
 
 /**
  * Ethereum Swarm storage adapter for the storage-agnostic image props.
@@ -21,18 +30,14 @@ import { ImageFetchFn, ImageUploadFn } from '../types';
  * ```
  */
 
-export interface SwarmStorageConfig {
-  /** Base URL of the Bee node / gateway API, e.g. `http://localhost:1633`. */
-  beeUrl: string;
+export interface SwarmStorageConfig extends SwarmRequestConfig {
   /**
    * Postage batch ID used to pay for uploads. Required for
-   * `createSwarmImageUploadFn`; unused by fetch. When uploading through a
-   * stamping gateway that attaches its own stamp, pass an empty string and
-   * the header is omitted.
+   * `createSwarmImageUploadFn`; unused by fetch — reading needs no stamp.
+   * When uploading through a stamping gateway that attaches its own stamp,
+   * pass an empty string and the header is omitted.
    */
   postageBatchId?: string;
-  /** Extra headers sent with every request (e.g. gateway auth). */
-  headers?: Record<string, string>;
   /**
    * Defer chunk propagation to the node (`swarm-deferred-upload: true`,
    * Bee's default). Set `false` to wait until data is fully synced to the
@@ -43,25 +48,6 @@ export interface SwarmStorageConfig {
 
 const GCM_TAG_BYTES = 16;
 const GCM_NONCE_BYTES = 12;
-
-const toBase64 = (bytes: Uint8Array): string => {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-};
-
-const fromBase64 = (value: string): Uint8Array<ArrayBuffer> => {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-};
-
-const stripTrailingSlash = (url: string) => url.replace(/\/+$/, '');
 
 /**
  * Create an `imageUploadFn` that AES-256-GCM encrypts the file and uploads
@@ -92,27 +78,34 @@ export const createSwarmImageUploadFn = (
     const ciphertext = sealed.slice(0, sealed.length - GCM_TAG_BYTES);
     const authTag = sealed.slice(sealed.length - GCM_TAG_BYTES);
 
-    const headers: Record<string, string> = {
-      'content-type': 'application/octet-stream',
-      ...(config.postageBatchId
-        ? { 'swarm-postage-batch-id': config.postageBatchId }
-        : {}),
-      ...(config.deferred === false
-        ? { 'swarm-deferred-upload': 'false' }
-        : {}),
-      ...config.headers,
-    };
-    const response = await fetch(`${beeUrl}/bytes`, {
+    config.onProgress?.({
+      stage: 'upload',
+      status: 'start',
+      total: ciphertext.length,
+    });
+    const response = await swarmFetch(config, '/bytes', {
       method: 'POST',
-      headers,
+      headers: {
+        'content-type': 'application/octet-stream',
+        ...(config.postageBatchId
+          ? { 'swarm-postage-batch-id': config.postageBatchId }
+          : {}),
+        ...(config.deferred === false
+          ? { 'swarm-deferred-upload': 'false' }
+          : {}),
+      },
       body: ciphertext,
     });
-    if (!response.ok) {
-      throw new Error(
-        `Swarm upload failed: ${response.status} ${response.statusText}`,
-      );
+    if (response.status === 404) {
+      throw new Error('Swarm upload failed: node rejected the upload (404)');
     }
     const { reference } = (await response.json()) as { reference: string };
+    config.onProgress?.({
+      stage: 'upload',
+      status: 'done',
+      loaded: ciphertext.length,
+      total: ciphertext.length,
+    });
 
     const rawKey = new Uint8Array(await crypto.subtle.exportKey('raw', key));
     return {
@@ -132,7 +125,6 @@ export const createSwarmImageUploadFn = (
 export const createSwarmImageFetchFn = (
   config: SwarmStorageConfig,
 ): ImageFetchFn => {
-  const beeUrl = stripTrailingSlash(config.beeUrl);
   return async ({
     encryptionKey,
     nonce,
@@ -142,20 +134,19 @@ export const createSwarmImageFetchFn = (
     contentRef,
   }) => {
     // Prefer re-deriving the location from this config so documents render
-    // even when the uploading host used a different Bee node.
-    const location = contentRef ? `${beeUrl}/bytes/${contentRef}` : url;
-    const response = await fetch(location, { headers: config.headers });
-    if (!response.ok) {
-      throw new Error(
-        `Swarm download failed: ${response.status} ${response.statusText}`,
-      );
+    // even when the uploading host used a different Bee node. Reads need no
+    // postage stamp, so this works on any reachable node.
+    const path = contentRef
+      ? `/bytes/${contentRef}`
+      : url.slice(stripTrailingSlash(config.beeUrl).length);
+    config.onProgress?.({ stage: 'download', status: 'start' });
+    const response = await swarmFetch(config, path);
+    if (response.status === 404) {
+      throw new Error(`Swarm download failed: content not found (${path})`);
     }
-    const ciphertext = new Uint8Array(await response.arrayBuffer());
+    const ciphertext = await readWithProgress(response, config.onProgress);
 
-    const tag = fromBase64(authTag);
-    const sealed = new Uint8Array(ciphertext.length + tag.length);
-    sealed.set(ciphertext);
-    sealed.set(tag, ciphertext.length);
+    const sealed = concatBytes(ciphertext, fromBase64(authTag));
 
     const key = await crypto.subtle.importKey(
       'raw',
@@ -164,11 +155,13 @@ export const createSwarmImageFetchFn = (
       false,
       ['decrypt'],
     );
+    config.onProgress?.({ stage: 'decrypt', status: 'start' });
     const plaintext = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv: fromBase64(nonce) },
       key,
       sealed,
     );
+    config.onProgress?.({ stage: 'decrypt', status: 'done' });
 
     const file = new File([plaintext], contentRef || 'image', {
       type: mimeType,

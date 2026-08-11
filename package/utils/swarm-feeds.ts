@@ -1,5 +1,12 @@
 import { keccak256 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import {
+  SwarmRequestConfig,
+  bytesToHex,
+  concatBytes,
+  hexToBytes,
+  swarmFetch,
+} from './swarm-common';
 
 /**
  * Minimal Ethereum Swarm sequence-feed client over the Bee HTTP API.
@@ -16,13 +23,12 @@ import { privateKeyToAccount } from 'viem/accounts';
  * written here are readable by bee-js and vice versa.
  */
 
-export interface SwarmFeedConfig {
-  /** Base URL of the Bee node / gateway API, e.g. `http://localhost:1633`. */
-  beeUrl: string;
-  /** Postage batch ID paying for feed updates (required to write). */
+export interface SwarmFeedConfig extends SwarmRequestConfig {
+  /**
+   * Postage batch ID paying for feed updates. Required to write; reads
+   * need no stamp, so a node without one can still follow feeds.
+   */
   postageBatchId?: string;
-  /** Extra headers sent with every request (e.g. gateway auth). */
-  headers?: Record<string, string>;
 }
 
 const SEGMENT_SIZE = 32;
@@ -31,26 +37,7 @@ const SOC_SIGNATURE_SIZE = 65;
 const SOC_IDENTIFIER_SIZE = 32;
 const SPAN_SIZE = 8;
 
-export const concatBytes = (
-  ...arrays: Uint8Array[]
-): Uint8Array<ArrayBuffer> => {
-  const out = new Uint8Array(arrays.reduce((n, a) => n + a.length, 0));
-  let offset = 0;
-  for (const a of arrays) {
-    out.set(a, offset);
-    offset += a.length;
-  }
-  return out;
-};
-
-export const bytesToHexString = (bytes: Uint8Array): string =>
-  Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-
 const utf8 = (value: string) => new TextEncoder().encode(value);
-
-const stripTrailingSlash = (url: string) => url.replace(/\/+$/, '');
 
 /** Chunk span: content length as uint64 little-endian. */
 const spanBytes = (length: number): Uint8Array => {
@@ -119,7 +106,6 @@ export const writeFeedUpdate = async (
   index: number,
   payload: Uint8Array,
 ): Promise<string> => {
-  const beeUrl = stripTrailingSlash(config.beeUrl);
   const account = privateKeyToAccount(ownerPrivateKey);
   const owner = account.address.slice(2).toLowerCase();
 
@@ -130,8 +116,10 @@ export const writeFeedUpdate = async (
   const digest = keccak256(concatBytes(identifier, address), 'bytes');
   const signature = await account.signMessage({ message: { raw: digest } });
 
-  const response = await fetch(
-    `${beeUrl}/soc/${owner}/${bytesToHexString(identifier)}?sig=${signature.slice(2)}`,
+  config.onProgress?.({ stage: 'feed-update', status: 'start' });
+  const response = await swarmFetch(
+    config,
+    `/soc/${owner}/${bytesToHex(identifier)}?sig=${signature.slice(2)}`,
     {
       method: 'POST',
       headers: {
@@ -139,17 +127,15 @@ export const writeFeedUpdate = async (
         ...(config.postageBatchId
           ? { 'swarm-postage-batch-id': config.postageBatchId }
           : {}),
-        ...config.headers,
       },
       body: concatBytes(spanBytes(payload.length), payload),
     },
   );
-  if (!response.ok) {
-    throw new Error(
-      `Feed update failed: ${response.status} ${await response.text()}`,
-    );
+  if (response.status === 404) {
+    throw new Error('Feed update failed: node rejected the chunk (404)');
   }
   const { reference } = (await response.json()) as { reference: string };
+  config.onProgress?.({ stage: 'feed-update', status: 'done' });
   return reference;
 };
 
@@ -162,16 +148,14 @@ export const readLatestFeedIndex = async (
   owner: string,
   topic: Uint8Array,
 ): Promise<{ index: number; nextIndex: number } | null> => {
-  const beeUrl = stripTrailingSlash(config.beeUrl);
-  const response = await fetch(
-    `${beeUrl}/feeds/${owner}/${bytesToHexString(topic)}?type=sequence`,
-    { headers: config.headers },
+  config.onProgress?.({ stage: 'feed-lookup', status: 'start' });
+  const response = await swarmFetch(
+    config,
+    `/feeds/${owner}/${bytesToHex(topic)}?type=sequence`,
   );
-  if (response.status === 404) return null;
-  if (!response.ok) {
-    throw new Error(
-      `Feed lookup failed: ${response.status} ${response.statusText}`,
-    );
+  if (response.status === 404) {
+    config.onProgress?.({ stage: 'feed-lookup', status: 'done' });
+    return null;
   }
   const indexHex = response.headers.get('swarm-feed-index');
   const nextHex = response.headers.get('swarm-feed-index-next');
@@ -179,6 +163,7 @@ export const readLatestFeedIndex = async (
     throw new Error('Feed lookup response missing swarm-feed-index header');
   }
   const index = parseInt(indexHex, 16);
+  config.onProgress?.({ stage: 'feed-lookup', status: 'done' });
   return { index, nextIndex: nextHex ? parseInt(nextHex, 16) : index + 1 };
 };
 
@@ -194,23 +179,17 @@ export const readFeedUpdate = async (
   topic: Uint8Array,
   index: number,
 ): Promise<Uint8Array | null> => {
-  const beeUrl = stripTrailingSlash(config.beeUrl);
   const identifier = feedIdentifier(topic, index);
-  const ownerBytes = new Uint8Array(
-    (owner.match(/../g) as string[]).map((b) => parseInt(b, 16)),
+  const socAddress = keccak256(
+    concatBytes(identifier, hexToBytes(owner)),
+    'bytes',
   );
-  const socAddress = keccak256(concatBytes(identifier, ownerBytes), 'bytes');
 
-  const response = await fetch(
-    `${beeUrl}/chunks/${bytesToHexString(socAddress)}`,
-    { headers: config.headers },
+  const response = await swarmFetch(
+    config,
+    `/chunks/${bytesToHex(socAddress)}`,
   );
   if (response.status === 404) return null;
-  if (!response.ok) {
-    throw new Error(
-      `Feed chunk fetch failed: ${response.status} ${response.statusText}`,
-    );
-  }
   // SOC chunk layout: identifier(32) || signature(65) || span(8) || payload.
   const data = new Uint8Array(await response.arrayBuffer());
   const payloadStart = SOC_IDENTIFIER_SIZE + SOC_SIGNATURE_SIZE + SPAN_SIZE;
