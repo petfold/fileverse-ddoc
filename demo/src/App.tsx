@@ -46,6 +46,7 @@ import { crypto as cryptoUtils } from './crypto';
 import { collabStore } from './storage/collab-store';
 import { docStore } from './storage/doc-store';
 import { swarmEnabled, useSwarmStorage } from './storage/swarm-store';
+import { SwarmRestoreProgress } from './components/SwarmRestoreProgress';
 import { DocumentVersion } from '../../package/utils/swarm-document-storage';
 
 /**
@@ -145,8 +146,15 @@ function App() {
 
   // Swarm storage (images + document snapshots) — active when
   // VITE_BEE_API_URL is set (see storage/swarm-store.ts).
-  const { imageUploadFn, imageFetchFn, docStorage, stampHealth } =
-    useSwarmStorage(docId);
+  const {
+    imageUploadFn,
+    imageFetchFn,
+    docStorage,
+    stampHealth,
+    nodeState,
+    canWrite,
+    progress: swarmProgress,
+  } = useSwarmStorage(docId);
   const [swarmStatus, setSwarmStatus] = useState<
     | { state: 'off' }
     | { state: 'saving' }
@@ -218,11 +226,21 @@ function App() {
   const [swarmRestoring, setSwarmRestoring] = useState(
     () => swarmEnabled && !docStore.getContent(docId),
   );
+  const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [restoreAttempt, setRestoreAttempt] = useState(0);
   useEffect(() => {
-    if (!swarmRestoring || !docStorage) return;
+    if (!swarmRestoring) return;
+    // The node answered but has no batch: reads still work, so carry on.
+    // Only a node we cannot reach at all ends the restore early.
+    if (nodeState.kind === 'unreachable') {
+      setRestoreError(nodeState.reason || 'Bee node unreachable');
+      return;
+    }
+    if (!docStorage) return;
     let cancelled = false;
     (async () => {
       try {
+        setRestoreError(null);
         const snapshot = await docStorage.loadDocument(docId);
         if (cancelled) return;
         if (snapshot) {
@@ -241,16 +259,19 @@ function App() {
             `Swarm: restored document version ${snapshot.feedIndex}`,
           );
         }
+        if (!cancelled) setSwarmRestoring(false);
       } catch (error) {
         console.warn('Swarm restore failed', error);
-      } finally {
-        if (!cancelled) setSwarmRestoring(false);
+        // Keep the progress screen up with the reason and a retry, rather
+        // than dropping into an empty editor that silently discards the
+        // document that may still be out there.
+        if (!cancelled) setRestoreError((error as Error).message);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [swarmRestoring, docStorage, docId]);
+  }, [swarmRestoring, docStorage, docId, nodeState, restoreAttempt]);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const swarmSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -810,7 +831,11 @@ function App() {
           >
             {lastSavedAt ? 'Saved' : 'Not saved yet'}
           </Tag>
-          {swarmStatus.state !== 'off' && (
+          {/* Shown as soon as the node answers — including read-only nodes,
+              where nothing is ever saved but versions remain browsable. */}
+          {(swarmStatus.state !== 'off' ||
+            nodeState.kind === 'ready' ||
+            nodeState.kind === 'read-only') && (
             <div className="relative hidden xl:block">
               <button
                 type="button"
@@ -819,19 +844,25 @@ function App() {
                 className="h-6 rounded border color-border-default color-text-secondary text-[12px] font-normal flex items-center gap-1 px-2 cursor-pointer"
                 style={{ backgroundColor: 'hsl(var(--color-bg-secondary))' }}
                 title={
+                  (nodeState.kind === 'read-only'
+                    ? `Read-only: ${nodeState.reason}. Buy a postage batch to save. `
+                    : '') +
                   (stampHealth
                     ? `Postage stamp ${stampHealth.status} — ${Math.round(stampHealth.utilization * 100)}% full, expires ${stampHealth.expiresAt.toLocaleDateString()}. `
-                    : '') + 'Click for version history'
+                    : '') +
+                  'Click for version history'
                 }
               >
                 <SwarmIcon />
                 {versionPreview
                   ? `Swarm: viewing v${versionPreview.index}`
-                  : swarmStatus.state === 'saving'
-                    ? 'Swarm: saving…'
-                    : swarmStatus.state === 'saved'
-                      ? `Swarm: saved v${swarmStatus.version}`
-                      : 'Swarm: save failed'}
+                  : !canWrite
+                    ? 'Swarm: read-only'
+                    : swarmStatus.state === 'saving'
+                      ? 'Swarm: saving…'
+                      : swarmStatus.state === 'saved'
+                        ? `Swarm: saved v${swarmStatus.version}`
+                        : 'Swarm: save failed'}
                 {stampHealth && stampHealth.status !== 'ok'
                   ? ` · stamp ${stampHealth.status}`
                   : ''}
@@ -1180,9 +1211,19 @@ function App() {
         onStylingChange={setDocumentStyling}
       />
       {swarmRestoring ? (
-        <div className="flex items-center justify-center h-96 color-text-secondary">
-          Restoring document from Swarm…
-        </div>
+        <SwarmRestoreProgress
+          nodeState={nodeState}
+          progress={swarmProgress}
+          error={restoreError}
+          onSkip={() => {
+            setRestoreError(null);
+            setSwarmRestoring(false);
+          }}
+          onRetry={() => {
+            setRestoreError(null);
+            setRestoreAttempt((n) => n + 1);
+          }}
+        />
       ) : (
       <DdocEditor
         ref={editorRef}
