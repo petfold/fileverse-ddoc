@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   SwarmCondition,
   SwarmRemedyKind,
@@ -12,10 +13,15 @@ import { SwarmPostagePanel } from './SwarmPostagePanel';
  * `diagnoseSwarm`, so this component stays a renderer: new conditions
  * appear here without changing it.
  *
- * Placed above the document rather than over it. Editing continues in every
- * one of these states — edits persist locally and go out once Swarm is
- * writable again — so blocking the page would remove a working capability
- * and still not explain anything.
+ * Editing continues in every one of these states — edits persist locally
+ * and go out once Swarm is writable again — so the bar informs rather than
+ * blocks.
+ *
+ * Rendered through a portal, pinned to the bottom of the viewport. The
+ * editor's navbar and toolbar are `fixed`, so a bar in normal flow lands
+ * underneath them: present in the DOM, invisible on screen — which is
+ * exactly what happened the first time. Bottom keeps it clear of that
+ * chrome while staying visible without scrolling.
  */
 
 export interface SwarmNoticeProps {
@@ -42,10 +48,14 @@ export const SwarmNotice = ({
 
   const isBlocked = condition.severity === 'blocked';
 
-  return (
+  return createPortal(
     <div
-      className="border-b color-border-default text-[13px]"
-      style={{ backgroundColor: 'hsl(var(--color-bg-secondary))' }}
+      data-swarm-notice=""
+      className="fixed left-0 right-0 bottom-0 border-t color-border-default text-[13px] shadow-elevation-3 max-h-[70vh] overflow-y-auto"
+      style={{
+        backgroundColor: 'hsl(var(--color-bg-secondary))',
+        zIndex: 99999,
+      }}
     >
       <div
         className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2"
@@ -105,6 +115,7 @@ export const SwarmNotice = ({
           }}
         />
       )}
-    </div>
+    </div>,
+    document.body,
   );
 };
