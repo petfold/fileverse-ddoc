@@ -352,15 +352,6 @@ function App() {
     exitVersionPreview();
   }, [docStorage, docId, versionPreview, exitVersionPreview]);
 
-  // Swarm becoming writable again — a batch bought, or a node that came
-  // back — must flush whatever was typed meanwhile. Not a one-shot: a node
-  // can stop and restart any number of times in a session.
-  useEffect(() => {
-    if (canWrite && unsavedRef.current) {
-      scheduleSwarmSave(unsavedRef.current);
-    }
-  }, [canWrite, scheduleSwarmSave]);
-
   // ?swarmVersion=N deep link: enter version preview once storage is ready.
   useEffect(() => {
     const pending = pendingVersionParamRef.current;
@@ -406,6 +397,17 @@ function App() {
     },
     [docId, docStorage, versionPreview, canWrite],
   );
+
+  // Swarm becoming writable again — a batch bought, or a node that came
+  // back — must flush whatever was typed meanwhile. Not a one-shot: a node
+  // can stop and restart any number of times in a session. Declared after
+  // scheduleSwarmSave: naming it in the dependency array of an earlier
+  // effect reads the binding during render, before its initialiser runs.
+  useEffect(() => {
+    if (canWrite && unsavedRef.current) {
+      scheduleSwarmSave(unsavedRef.current);
+    }
+  }, [canWrite, scheduleSwarmSave]);
 
   const handleContentChange = useCallback(
     (
