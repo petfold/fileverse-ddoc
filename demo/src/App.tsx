@@ -47,6 +47,7 @@ import { collabStore } from './storage/collab-store';
 import { docStore } from './storage/doc-store';
 import { swarmEnabled, useSwarmStorage } from './storage/swarm-store';
 import { SwarmRestoreProgress } from './components/SwarmRestoreProgress';
+import { SwarmPostageNotice } from './components/SwarmPostageNotice';
 import { DocumentVersion } from '../../package/utils/swarm-document-storage';
 
 /**
@@ -154,6 +155,8 @@ function App() {
     nodeState,
     canWrite,
     progress: swarmProgress,
+    adoptBatch,
+    beeUrl: swarmBeeUrl,
   } = useSwarmStorage(docId);
   const [swarmStatus, setSwarmStatus] = useState<
     | { state: 'off' }
@@ -335,6 +338,17 @@ function App() {
     exitVersionPreview();
   }, [docStorage, docId, versionPreview, exitVersionPreview]);
 
+  // A batch arriving mid-session (bought from the notice) makes everything
+  // typed since the document opened saveable — push it straight away.
+  const pushedAfterBatchRef = useRef(false);
+  useEffect(() => {
+    if (!canWrite || pushedAfterBatchRef.current) return;
+    pushedAfterBatchRef.current = true;
+    if (swarmStatus.state === 'off' && lastContentRef.current) {
+      scheduleSwarmSave(lastContentRef.current);
+    }
+  }, [canWrite, scheduleSwarmSave, swarmStatus.state]);
+
   // ?swarmVersion=N deep link: enter version preview once storage is ready.
   useEffect(() => {
     const pending = pendingVersionParamRef.current;
@@ -346,7 +360,12 @@ function App() {
 
   const scheduleSwarmSave = useCallback(
     (content: string) => {
-      if (!docStorage || versionPreview) return;
+      // Without a batch every save would fail; keep the content in
+      // lastContentRef so it can go out the moment one is bought.
+      if (!docStorage || versionPreview || !canWrite) {
+        lastContentRef.current = content;
+        return;
+      }
       lastContentRef.current = content;
       if (swarmSaveTimeoutRef.current) {
         clearTimeout(swarmSaveTimeoutRef.current);
@@ -368,7 +387,7 @@ function App() {
         }
       }, 2000);
     },
-    [docId, docStorage, versionPreview],
+    [docId, docStorage, versionPreview, canWrite],
   );
 
   const handleContentChange = useCallback(
@@ -851,7 +870,7 @@ function App() {
                 style={{ backgroundColor: 'hsl(var(--color-bg-secondary))' }}
                 title={
                   (nodeState.kind === 'read-only'
-                    ? `Read-only: ${nodeState.reason}. Buy a postage batch to save. `
+                    ? `Edits are kept in this browser only — ${nodeState.reason.toLowerCase()}, so nothing is being written to Swarm. Get a postage batch to save. `
                     : '') +
                   (stampHealth
                     ? `Postage stamp ${stampHealth.status} — ${Math.round(stampHealth.utilization * 100)}% full, expires ${stampHealth.expiresAt.toLocaleDateString()}. `
@@ -863,7 +882,7 @@ function App() {
                 {versionPreview
                   ? `Swarm: viewing v${versionPreview.index}`
                   : !canWrite
-                    ? 'Swarm: read-only'
+                    ? 'Swarm: not saving'
                     : swarmStatus.state === 'saving'
                       ? 'Swarm: saving…'
                       : swarmStatus.state === 'saved'
@@ -1216,6 +1235,11 @@ function App() {
         documentStyling={documentStyling}
         onStylingChange={setDocumentStyling}
       />
+      {/* Sits above the editor, not over it: the document stays usable
+          while the reason nothing is being saved is spelled out. */}
+      {nodeState.kind === 'read-only' && swarmBeeUrl && !swarmRestoring && (
+        <SwarmPostageNotice beeUrl={swarmBeeUrl} onBatchReady={adoptBatch} />
+      )}
       {swarmRestoring ? (
         <SwarmRestoreProgress
           nodeState={nodeState}

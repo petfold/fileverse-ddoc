@@ -88,6 +88,10 @@ export const useSwarmStorage = (docId: string) => {
   const [nodeState, setNodeState] = useState<SwarmNodeState>(() =>
     swarmEnabled ? { kind: 'connecting' } : { kind: 'unreachable', reason: '' },
   );
+  /** Adopt a batch bought during the session, without a reload. */
+  const adoptBatch = useCallback((batchId: string) => {
+    setNodeState({ kind: 'ready', batchId });
+  }, []);
   const [stampHealth, setStampHealth] = useState<StampHealth | null>(null);
   const [progress, setProgress] = useState<SwarmProgress | null>(null);
   // Progress handler identity must stay stable — it is baked into the
@@ -134,7 +138,6 @@ export const useSwarmStorage = (docId: string) => {
           `Swarm: storing images and documents via ${beeUrl} (batch ${batchId.slice(0, 8)}…)`,
         );
         setNodeState({ kind: 'ready', batchId });
-        setStampHealth(await checkStampHealth({ beeUrl }, batchId));
       } catch (error) {
         if (cancelled) return;
         console.warn('Swarm: postage batch lookup failed', error);
@@ -185,6 +188,19 @@ export const useSwarmStorage = (docId: string) => {
     [storageConfig, canWrite],
   );
 
+  // Stamp health follows whichever batch is in use, including one bought
+  // mid-session.
+  useEffect(() => {
+    if (!beeUrl || !batchId) return;
+    let cancelled = false;
+    checkStampHealth({ beeUrl }, batchId)
+      .then((health) => !cancelled && setStampHealth(health))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [batchId]);
+
   return {
     ...imageFns,
     docStorage,
@@ -192,5 +208,7 @@ export const useSwarmStorage = (docId: string) => {
     nodeState,
     canWrite,
     progress,
+    adoptBatch,
+    beeUrl,
   };
 };
