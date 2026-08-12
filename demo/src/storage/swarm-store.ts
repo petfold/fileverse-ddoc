@@ -100,6 +100,11 @@ export const useSwarmStorage = (docId: string) => {
   const progressRef = useRef(onProgress);
   progressRef.current = onProgress;
 
+  // Bumped to re-run the probe — the "check again" remedy, and after a
+  // postage change settles.
+  const [probe, setProbe] = useState(0);
+  const recheck = useCallback(() => setProbe((n) => n + 1), []);
+
   useEffect(() => {
     if (!beeUrl) return;
     let cancelled = false;
@@ -150,7 +155,7 @@ export const useSwarmStorage = (docId: string) => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [probe]);
 
   const canWrite = nodeState.kind === 'ready';
   const batchId = nodeState.kind === 'ready' ? nodeState.batchId : undefined;
@@ -188,6 +193,42 @@ export const useSwarmStorage = (docId: string) => {
     [storageConfig, canWrite],
   );
 
+  // Conditions are only as fresh as their inputs: the browser can go
+  // offline and the node can stop after the initial probe, so both are
+  // watched for as long as the document is open.
+  const [online, setOnline] = useState(() =>
+    typeof navigator === 'undefined' ? true : navigator.onLine,
+  );
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine);
+    window.addEventListener('online', update);
+    window.addEventListener('offline', update);
+    return () => {
+      window.removeEventListener('online', update);
+      window.removeEventListener('offline', update);
+    };
+  }, []);
+
+  const [nodeReachable, setNodeReachable] = useState(true);
+  useEffect(() => {
+    if (!beeUrl || nodeState.kind === 'connecting') return;
+    let cancelled = false;
+    const ping = async () => {
+      try {
+        await swarmFetch({ beeUrl }, '/health', { timeoutMs: 5_000 });
+        if (!cancelled) setNodeReachable(true);
+      } catch {
+        if (!cancelled) setNodeReachable(false);
+      }
+    };
+    ping();
+    const id = setInterval(ping, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [nodeState.kind, probe]);
+
   // Stamp health follows whichever batch is in use, including one bought
   // mid-session.
   useEffect(() => {
@@ -210,5 +251,15 @@ export const useSwarmStorage = (docId: string) => {
     progress,
     adoptBatch,
     beeUrl,
+    batchId,
+    /** Inputs for `diagnoseSwarm`, kept current while the document is open. */
+    diagnosticsInput: {
+      online,
+      nodeReachable: nodeReachable && nodeState.kind !== 'unreachable',
+      stamp: stampHealth,
+      hasBatch: Boolean(batchId),
+      localFallback: 'browser' as const,
+    },
+    recheck,
   };
 };

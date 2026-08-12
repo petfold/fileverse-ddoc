@@ -70,6 +70,17 @@ export {
   makeDocumentFeedTopic,
 } from './package/utils/swarm-document-storage';
 export { SwarmTimeoutError } from './package/utils/swarm-common';
+export {
+  diagnoseSwarm,
+  primarySwarmCondition,
+} from './package/utils/swarm-diagnostics';
+export type {
+  SwarmCondition,
+  SwarmConditionKind,
+  SwarmDiagnosticsInput,
+  SwarmRemedy,
+  SwarmRemedyKind,
+} from './package/utils/swarm-diagnostics';
 export type {
   SwarmProgress,
   SwarmProgressHandler,
