@@ -61,6 +61,51 @@ export interface StampHealth {
   status: 'ok' | 'expiring' | 'nearly-full' | 'unusable';
 }
 
+/** Bee rejects batches shallower than this. */
+export const MIN_BATCH_DEPTH = 17;
+/** Swarm chunk payload size. */
+export const CHUNK_SIZE_BYTES = 4096;
+/** PLUR per BZZ (BZZ has 16 decimals). */
+export const PLUR_PER_BZZ = 10 ** 16;
+/** Gnosis Chain block time — postage is charged per block. */
+export const BLOCK_TIME_SECONDS = 5;
+
+/** Live postage pricing, from `GET /chainstate`. */
+export interface ChainState {
+  /** PLUR charged per chunk per block. */
+  currentPrice: number;
+  block: number;
+  minimumValidityBlocks: number;
+}
+
+/** The node's own funds, from `GET /wallet`. */
+export interface WalletBalance {
+  /** xBZZ in PLUR — this pays for postage. */
+  bzzBalance: number;
+  /** xDAI in wei — this pays gas for the purchase transaction. */
+  nativeTokenBalance: number;
+  walletAddress: string;
+  chainID: number;
+}
+
+/** What a prospective batch would cost and provide. */
+export interface BatchEstimate {
+  depth: number;
+  /** Per-chunk balance, the `amount` a purchase takes. */
+  amount: number;
+  /** 2^depth chunks — the theoretical ceiling. */
+  capacityBytes: number;
+  /**
+   * Realistic capacity. Chunks land in 2^16 buckets by address and a batch
+   * is full once any bucket is, so the usable share is well below the
+   * ceiling — Swarm's own guidance is to assume roughly half.
+   */
+  usableCapacityBytes: number;
+  ttlSeconds: number;
+  costPlur: number;
+  costBzz: number;
+}
+
 const DEFAULT_MIN_TTL_SECONDS = 7 * 24 * 60 * 60;
 const DEFAULT_MAX_UTILIZATION = 0.9;
 /** Stamp endpoints answer from local node state — no network lookup. */
@@ -134,11 +179,75 @@ export const checkStampHealth = async (
   };
 };
 
+/** Current postage price and chain position. */
+export const getChainState = async (
+  config: SwarmNodeConfig,
+): Promise<ChainState> => {
+  const state = (await request(config, '/chainstate')) as {
+    currentPrice: string;
+    block: number;
+    minimumValidityBlocks: number;
+  };
+  return {
+    currentPrice: Number(state.currentPrice),
+    block: state.block,
+    minimumValidityBlocks: state.minimumValidityBlocks,
+  };
+};
+
+/** The node's wallet — what a purchase would be paid from. */
+export const getWalletBalance = async (
+  config: SwarmNodeConfig,
+): Promise<WalletBalance> => {
+  const wallet = (await request(config, '/wallet')) as {
+    bzzBalance: string;
+    nativeTokenBalance: string;
+    walletAddress: string;
+    chainID: number;
+  };
+  return {
+    bzzBalance: Number(wallet.bzzBalance),
+    nativeTokenBalance: Number(wallet.nativeTokenBalance),
+    walletAddress: wallet.walletAddress,
+    chainID: wallet.chainID,
+  };
+};
+
+/** Per-chunk balance that keeps a batch alive for `days` at `price`. */
+export const amountForDuration = (days: number, price: number): number =>
+  Math.ceil((days * 24 * 60 * 60) / BLOCK_TIME_SECONDS) * price;
+
+/**
+ * Cost and yield of a batch, so a host can show the price before spending
+ * anything. Purely local arithmetic over the live `currentPrice`.
+ */
+export const estimateBatch = (options: {
+  depth: number;
+  days: number;
+  price: number;
+}): BatchEstimate => {
+  const depth = Math.max(MIN_BATCH_DEPTH, Math.floor(options.depth));
+  const amount = amountForDuration(options.days, options.price);
+  const chunks = 2 ** depth;
+  const capacityBytes = chunks * CHUNK_SIZE_BYTES;
+  const costPlur = amount * chunks;
+  return {
+    depth,
+    amount,
+    capacityBytes,
+    usableCapacityBytes: Math.floor(capacityBytes / 2),
+    ttlSeconds: Math.floor((amount / options.price) * BLOCK_TIME_SECONDS),
+    costPlur,
+    costBzz: costPlur / PLUR_PER_BZZ,
+  };
+};
+
 /**
  * Buy a new postage batch (spends xBZZ, settles on-chain). `amount` is the
  * per-chunk balance in PLUR (drives TTL), `depth` the capacity (2^depth
- * chunks of 4KB). Returns the new batch ID; the batch may need a few
- * blocks before `usable` turns true.
+ * chunks of 4KB) — {@link estimateBatch} turns a wanted size and duration
+ * into both. Returns the new batch ID; the batch may need a few blocks
+ * before `usable` turns true.
  */
 export const buyStamp = async (
   config: SwarmNodeConfig,

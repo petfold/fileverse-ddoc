@@ -97,12 +97,23 @@ export {
   buyStamp,
   topUpStamp,
   diluteStamp,
+  getChainState,
+  getWalletBalance,
+  estimateBatch,
+  amountForDuration,
+  MIN_BATCH_DEPTH,
+  CHUNK_SIZE_BYTES,
+  PLUR_PER_BZZ,
+  BLOCK_TIME_SECONDS,
 } from './package/utils/swarm-stamps';
 export type {
   SwarmNodeConfig,
   PostageStamp,
   StampHealth,
   StampHealthThresholds,
+  ChainState,
+  WalletBalance,
+  BatchEstimate,
 } from './package/utils/swarm-stamps';
 export type { IComment } from './package/extensions/comment/comment.ts';
 export type { FontDescriptor } from './package/types';
