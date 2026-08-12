@@ -47,7 +47,8 @@ import { collabStore } from './storage/collab-store';
 import { docStore } from './storage/doc-store';
 import { swarmEnabled, useSwarmStorage } from './storage/swarm-store';
 import { SwarmRestoreProgress } from './components/SwarmRestoreProgress';
-import { SwarmPostageNotice } from './components/SwarmPostageNotice';
+import { SwarmNotice } from './components/SwarmNotice';
+import { primarySwarmCondition } from '../../package/utils/swarm-diagnostics';
 import { DocumentVersion } from '../../package/utils/swarm-document-storage';
 
 /**
@@ -157,6 +158,9 @@ function App() {
     progress: swarmProgress,
     adoptBatch,
     beeUrl: swarmBeeUrl,
+    batchId: swarmBatchId,
+    diagnosticsInput,
+    recheck: recheckSwarm,
   } = useSwarmStorage(docId);
   const [swarmStatus, setSwarmStatus] = useState<
     | { state: 'off' }
@@ -164,6 +168,14 @@ function App() {
     | { state: 'saved'; version: number }
     | { state: 'error'; message: string }
   >({ state: 'off' });
+  // What (if anything) is wrong with Swarm right now, in the user's terms.
+  const swarmCondition = swarmEnabled
+    ? primarySwarmCondition({
+        ...diagnosticsInput,
+        lastError:
+          swarmStatus.state === 'error' ? swarmStatus.message : undefined,
+      })
+    : null;
   // Version preview — through the package's versionHistoryState
   // convention: selecting a version re-hydrates the mounted editor in
   // place (no page reload), and the package itself suspends IndexedDB
@@ -1230,9 +1242,19 @@ function App() {
         onStylingChange={setDocumentStyling}
       />
       {/* Sits above the editor, not over it: the document stays usable
-          while the reason nothing is being saved is spelled out. */}
-      {nodeState.kind === 'read-only' && swarmBeeUrl && !swarmRestoring && (
-        <SwarmPostageNotice beeUrl={swarmBeeUrl} onBatchReady={adoptBatch} />
+          while whatever is wrong with Swarm is spelled out. Covers every
+          condition diagnoseSwarm knows about, not just missing postage. */}
+      {swarmCondition && swarmBeeUrl && !swarmRestoring && (
+        <SwarmNotice
+          condition={swarmCondition}
+          beeUrl={swarmBeeUrl}
+          batchId={swarmBatchId}
+          onRetry={recheckSwarm}
+          onBatchReady={(id) => {
+            adoptBatch(id);
+            recheckSwarm();
+          }}
+        />
       )}
       {swarmRestoring ? (
         <SwarmRestoreProgress
