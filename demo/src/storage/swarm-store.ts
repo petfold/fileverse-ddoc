@@ -157,7 +157,11 @@ export const useSwarmStorage = (docId: string) => {
     };
   }, [probe]);
 
-  const canWrite = nodeState.kind === 'ready';
+  // Declared before the health ping that maintains it (hoisted state).
+  const [nodeReachable, setNodeReachable] = useState(true);
+  // Writing needs both a batch and a node that is actually answering: a
+  // node that stops mid-session must hold content back, not fail saves.
+  const canWrite = nodeState.kind === 'ready' && nodeReachable;
   const batchId = nodeState.kind === 'ready' ? nodeState.batchId : undefined;
   /** Usable for reads as soon as the node answers, batch or not. */
   const nodeUsable = nodeState.kind === 'ready' || nodeState.kind === 'read-only';
@@ -209,7 +213,6 @@ export const useSwarmStorage = (docId: string) => {
     };
   }, []);
 
-  const [nodeReachable, setNodeReachable] = useState(true);
   useEffect(() => {
     if (!beeUrl || nodeState.kind === 'connecting') return;
     let cancelled = false;
