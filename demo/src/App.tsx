@@ -296,6 +296,8 @@ function App() {
   // content onChange, and vice versa).
   const titleRef = useRef<string>('Untitled');
   const lastContentRef = useRef<string | null>(docStore.getContent(docId));
+  /** Content not yet accepted by Swarm — flushed when writing resumes. */
+  const unsavedRef = useRef<string | null>(null);
 
   /** Load a snapshot and enter version mode — the mounted editor
    *  re-hydrates via versionHistoryState (versionId keys the hydration). */
@@ -350,16 +352,14 @@ function App() {
     exitVersionPreview();
   }, [docStorage, docId, versionPreview, exitVersionPreview]);
 
-  // A batch arriving mid-session (bought from the notice) makes everything
-  // typed since the document opened saveable — push it straight away.
-  const pushedAfterBatchRef = useRef(false);
+  // Swarm becoming writable again — a batch bought, or a node that came
+  // back — must flush whatever was typed meanwhile. Not a one-shot: a node
+  // can stop and restart any number of times in a session.
   useEffect(() => {
-    if (!canWrite || pushedAfterBatchRef.current) return;
-    pushedAfterBatchRef.current = true;
-    if (swarmStatus.state === 'off' && lastContentRef.current) {
-      scheduleSwarmSave(lastContentRef.current);
+    if (canWrite && unsavedRef.current) {
+      scheduleSwarmSave(unsavedRef.current);
     }
-  }, [canWrite, scheduleSwarmSave, swarmStatus.state]);
+  }, [canWrite, scheduleSwarmSave]);
 
   // ?swarmVersion=N deep link: enter version preview once storage is ready.
   useEffect(() => {
@@ -372,13 +372,16 @@ function App() {
 
   const scheduleSwarmSave = useCallback(
     (content: string) => {
-      // Without a batch every save would fail; keep the content in
-      // lastContentRef so it can go out the moment one is bought.
+      // Nothing can reach Swarm right now (no batch, or the node stopped):
+      // hold the content rather than firing saves that can only fail. The
+      // effect above flushes it when Swarm becomes writable again.
       if (!docStorage || versionPreview || !canWrite) {
         lastContentRef.current = content;
+        unsavedRef.current = content;
         return;
       }
       lastContentRef.current = content;
+      unsavedRef.current = content;
       if (swarmSaveTimeoutRef.current) {
         clearTimeout(swarmSaveTimeoutRef.current);
       }
@@ -389,6 +392,8 @@ function App() {
             docId,
             packSnapshot(titleRef.current, content),
           );
+          // Only now is this content durable beyond the browser.
+          if (unsavedRef.current === content) unsavedRef.current = null;
           setSwarmStatus({ state: 'saved', version: version.index });
         } catch (error) {
           console.error('Swarm save failed', error);
