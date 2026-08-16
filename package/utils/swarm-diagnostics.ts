@@ -21,10 +21,13 @@ export type SwarmConditionKind =
   | 'batch-expired'
   | 'batch-expiring'
   | 'batch-full'
+  | 'provider-not-connected'
+  | 'provider-cannot-publish'
   | 'operation-failed';
 
 export type SwarmRemedyKind =
   | 'retry'
+  | 'grant-access'
   | 'buy-batch'
   | 'top-up-batch'
   | 'dilute-batch'
@@ -67,6 +70,16 @@ export interface SwarmDiagnosticsInput {
   lastError?: string | null;
   /** Where the content is kept while Swarm is unavailable. */
   localFallback?: 'browser' | 'none';
+  /**
+   * Set when Swarm is reached through an injected provider rather than a
+   * node API. Postage then belongs to the provider, so postage remedies
+   * are suppressed and its own reason codes are explained instead.
+   */
+  provider?: {
+    canWrite: boolean;
+    /** Provider reason code, e.g. `not-connected`, `no-usable-stamps`. */
+    reason?: string;
+  };
 }
 
 const SEVERITY_ORDER: Record<SwarmCondition['severity'], number> = {
@@ -88,6 +101,43 @@ const POSTAGE_DOCS =
  * All conditions that currently apply, most severe first. An empty array
  * means Swarm is healthy and nothing needs saying.
  */
+/**
+ * Provider reason codes, in the user's terms. The provider owns postage
+ * and node lifecycle here, so these describe rather than offer to fix —
+ * except where the page itself can act, which is the consent prompt.
+ */
+const PROVIDER_REASONS: Record<
+  string,
+  { title: string; detail: string; canGrant?: boolean }
+> = {
+  'not-connected': {
+    title: 'Your browser has not granted access to Swarm yet',
+    detail:
+      'This page needs your permission before it can publish through your browser\u2019s Swarm node.',
+    canGrant: true,
+  },
+  'node-stopped': {
+    title: 'Your browser\u2019s Swarm node is stopped',
+    detail:
+      'The node built into your browser is not running, so nothing can be published.',
+  },
+  'node-not-ready': {
+    title: 'Your browser\u2019s Swarm node is still starting',
+    detail:
+      'The node is running but not yet ready to publish. This usually clears by itself.',
+  },
+  'ultra-light-mode': {
+    title: 'Your browser\u2019s Swarm node is in browse-only mode',
+    detail:
+      'Ultra-light mode can read Swarm but not publish to it. Switching the node out of that mode enables saving.',
+  },
+  'no-usable-stamps': {
+    title: 'Your browser\u2019s Swarm node has no storage credit left',
+    detail:
+      'Publishing is paid for with postage, and your browser manages that on your behalf \u2014 it reports none available.',
+  },
+};
+
 export const diagnoseSwarm = (
   input: SwarmDiagnosticsInput,
 ): SwarmCondition[] => {
@@ -122,7 +172,28 @@ export const diagnoseSwarm = (
     });
   }
 
-  if (!input.hasBatch) {
+  if (input.provider) {
+    if (!input.provider.canWrite) {
+      const reason = input.provider.reason ?? 'unknown';
+      const known = PROVIDER_REASONS[reason];
+      conditions.push({
+        kind:
+          reason === 'not-connected'
+            ? 'provider-not-connected'
+            : 'provider-cannot-publish',
+        severity: 'blocked',
+        title: known?.title ?? 'Your browser cannot publish to Swarm',
+        detail: `${known?.detail ?? `The Swarm provider reported: ${reason}.`} ${keptSafely(
+          input,
+        )}`,
+        // Postage, node lifecycle and permissions are the provider's to
+        // manage; the only thing a page may ask for is consent.
+        remedies: known?.canGrant
+          ? [{ kind: 'grant-access', label: 'Grant access' }]
+          : [{ kind: 'retry', label: 'Check again' }],
+      });
+    }
+  } else if (!input.hasBatch) {
     conditions.push({
       kind: 'no-batch',
       severity: 'blocked',

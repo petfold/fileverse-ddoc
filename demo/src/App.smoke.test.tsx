@@ -105,6 +105,42 @@ describe('demo app', () => {
     });
   }, 30_000);
 
+  // A Swarm-aware browser (Freedom and similar) injects window.swarm and
+  // blocks raw node access, so the app must work with no node URL at all.
+  it('runs on an injected provider with no Bee URL configured', async () => {
+    stubBrowserApis();
+    vi.stubGlobal('fetch', async () => {
+      throw new Error('raw node access is blocked in this browser');
+    });
+    vi.stubGlobal('swarm', {
+      request: async ({ method }: { method: string }) => {
+        if (method === 'swarm_getCapabilities') {
+          return { specVersion: '1.0', canPublish: false, reason: 'not-connected' };
+        }
+        if (method === 'swarm_requestAccess') return { connected: true };
+        if (method === 'swarm_getSigningIdentity') {
+          // Before consent a provider refuses to name the app's identity.
+          throw Object.assign(new Error('unauthorized'), { code: 4100 });
+        }
+        throw Object.assign(new Error('not found'), {
+          data: { reason: 'chunk_not_found' },
+        });
+      },
+    });
+    vi.resetModules();
+    const { default: App } = await import('./App');
+    render(<App />);
+    // Consent is the one thing the page may ask for; postage is not its
+    // business here, so it must not offer to buy any.
+    await waitFor(
+      () => expect(screen.getByRole('button', { name: /grant access/i })).toBeTruthy(),
+      { timeout: 15_000 },
+    );
+    expect(
+      screen.queryByRole('button', { name: /postage batch/i }),
+    ).toBeNull();
+  }, 30_000);
+
   it('surfaces the Swarm condition when the node has no postage batch', async () => {
     stubBrowserApis();
     stubBee();

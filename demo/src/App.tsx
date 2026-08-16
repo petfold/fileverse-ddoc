@@ -161,6 +161,7 @@ function App() {
     batchId: swarmBatchId,
     diagnosticsInput,
     recheck: recheckSwarm,
+    grantAccess: grantSwarmAccess,
   } = useSwarmStorage(docId);
   const [swarmStatus, setSwarmStatus] = useState<
     | { state: 'off' }
@@ -251,6 +252,13 @@ function App() {
       setRestoreError(nodeState.reason || 'Bee node unreachable');
       return;
     }
+    // A provider only reveals this app's feed identity once the user has
+    // granted access, so before consent there is nothing to look up —
+    // open the document and let the notice ask for it.
+    if (diagnosticsInput.provider?.reason === 'not-connected') {
+      setSwarmRestoring(false);
+      return;
+    }
     if (!docStorage) return;
     let cancelled = false;
     (async () => {
@@ -286,7 +294,14 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [swarmRestoring, docStorage, docId, nodeState, restoreAttempt]);
+  }, [
+    swarmRestoring,
+    docStorage,
+    docId,
+    nodeState,
+    restoreAttempt,
+    diagnosticsInput.provider?.reason,
+  ]);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const swarmSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -1251,12 +1266,13 @@ function App() {
       {/* Sits above the editor, not over it: the document stays usable
           while whatever is wrong with Swarm is spelled out. Covers every
           condition diagnoseSwarm knows about, not just missing postage. */}
-      {swarmCondition && swarmBeeUrl && !swarmRestoring && (
+      {swarmCondition && !swarmRestoring && (
         <SwarmNotice
           condition={swarmCondition}
-          beeUrl={swarmBeeUrl}
+          beeUrl={swarmBeeUrl ?? ''}
           batchId={swarmBatchId}
           onRetry={recheckSwarm}
+          onGrantAccess={grantSwarmAccess}
           onBatchReady={(id) => {
             adoptBatch(id);
             recheckSwarm();

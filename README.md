@@ -299,6 +299,39 @@ with the package, built directly on the [Bee](https://github.com/ethersphere/bee
 HTTP API with no extra dependencies. You need a Bee node (or gateway) and a
 usable postage batch.
 
+### Reaching a Swarm node
+
+There are two ways for a page to talk to Swarm, and the adapters support
+both through one interface:
+
+- A **Bee node's HTTP API** (`http://localhost:1633`) — full node
+  authority, right for servers, scripts and desktop apps.
+- A **provider injected at `window.swarm`**
+  ([Swarm Provider API](https://github.com/ethersphere/SWIPs/pull/94), the
+  `window.ethereum` pattern applied to Swarm) — origin-scoped and
+  permissioned. Browsers such as Freedom expose this and deliberately block
+  raw access to port 1633, since that is an administrative API rather than
+  a content transport.
+
+`detectSwarmTransport` prefers an injected provider and falls back to the
+node API, so one build works in both:
+
+```ts
+import { detectSwarmTransport } from "@fileverse-dev/ddoc";
+
+const transport = detectSwarmTransport({ beeUrl, postageBatchId });
+// pass `transport` to the adapters below; omit it to use beeUrl directly
+```
+
+Two differences are inherent, and `transport.status()` exposes them:
+
+- **Postage.** A provider manages stamps itself and (in v1) exposes no way
+  to buy or inspect them, so hide postage UI when `managesPostage` is true.
+- **Feed ownership.** Over HTTP the caller holds the signing key. A provider
+  signs with an origin-scoped identity and never exposes key material, so a
+  page can only write feeds it owns — it cannot adopt a key from a link.
+  Reading anyone's feed works either way.
+
 ### Images on Swarm
 
 ```tsx

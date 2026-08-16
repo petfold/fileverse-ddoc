@@ -15,10 +15,11 @@ import {
   createSwarmDocumentStorage,
   generateDocumentKey,
 } from '../../../package/utils/swarm-document-storage';
+import { SwarmProgress, swarmFetch } from '../../../package/utils/swarm-common';
 import {
-  SwarmProgress,
-  swarmFetch,
-} from '../../../package/utils/swarm-common';
+  SwarmTransportStatus,
+  detectSwarmTransport,
+} from '../../../package/utils/swarm-transport';
 
 /**
  * Demo wiring for Ethereum Swarm storage (images + document content).
@@ -36,11 +37,19 @@ import {
  */
 
 const beeUrl: string | undefined = import.meta.env.VITE_BEE_API_URL;
+/**
+ * A Swarm-aware browser injects `window.swarm` and blocks raw access to a
+ * node's API, so the provider is what makes the demo work there — and it
+ * needs no configuration, unlike a node URL.
+ */
+const hasProvider = () =>
+  typeof window !== 'undefined' &&
+  Boolean((window as { swarm?: unknown }).swarm);
 const pinnedBatch: string | undefined = import.meta.env
   .VITE_SWARM_POSTAGE_BATCH_ID;
 
 /** Whether Swarm storage is configured (sync, before any probing). */
-export const swarmEnabled = Boolean(beeUrl);
+export const swarmEnabled = Boolean(beeUrl) || hasProvider();
 
 /** Node reachability / write capability, surfaced to the UI. */
 export type SwarmNodeState =
@@ -105,8 +114,49 @@ export const useSwarmStorage = (docId: string) => {
   const [probe, setProbe] = useState(0);
   const recheck = useCallback(() => setProbe((n) => n + 1), []);
 
+  // A provider, when the browser injects one, replaces the node-URL path
+  // entirely: it owns postage and node lifecycle, and reports both through
+  // one capability call.
+  const providerTransport = useMemo(
+    () => (hasProvider() ? detectSwarmTransport({ beeUrl: beeUrl ?? '' }) : null),
+    [],
+  );
+  const [providerStatus, setProviderStatus] =
+    useState<SwarmTransportStatus | null>(null);
+
   useEffect(() => {
-    if (!beeUrl) return;
+    if (!providerTransport) return;
+    let cancelled = false;
+    const poll = async () => {
+      const status = await providerTransport.status();
+      if (cancelled) return;
+      setProviderStatus(status);
+      setNodeState(
+        status.canWrite
+          ? { kind: 'ready', batchId: 'provider-managed' }
+          : {
+              kind: 'read-only',
+              reason: status.reason ?? 'provider cannot publish',
+            },
+      );
+    };
+    poll();
+    const id = setInterval(poll, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [providerTransport, probe]);
+
+  /** Ask the browser for publishing consent (the `grant-access` remedy). */
+  const grantAccess = useCallback(async () => {
+    if (!providerTransport) return;
+    await providerTransport.connect();
+    setProbe((n) => n + 1);
+  }, [providerTransport]);
+
+  useEffect(() => {
+    if (!beeUrl || providerTransport) return;
     let cancelled = false;
     (async () => {
       // 1. Is the node reachable at all? (cheap, local to the node)
@@ -161,18 +211,23 @@ export const useSwarmStorage = (docId: string) => {
   const [nodeReachable, setNodeReachable] = useState(true);
   // Writing needs both a batch and a node that is actually answering: a
   // node that stops mid-session must hold content back, not fail saves.
-  const canWrite = nodeState.kind === 'ready' && nodeReachable;
+  const canWrite = providerTransport
+    ? Boolean(providerStatus?.canWrite)
+    : nodeState.kind === 'ready' && nodeReachable;
   const batchId = nodeState.kind === 'ready' ? nodeState.batchId : undefined;
   /** Usable for reads as soon as the node answers, batch or not. */
   const nodeUsable = nodeState.kind === 'ready' || nodeState.kind === 'read-only';
 
-  const storageConfig: SwarmStorageConfig | null = useMemo(
-    () =>
-      beeUrl && nodeUsable
-        ? { beeUrl, postageBatchId: batchId, onProgress }
-        : null,
-    [nodeUsable, batchId, onProgress],
-  );
+  const storageConfig: SwarmStorageConfig | null = useMemo(() => {
+    if (providerTransport) {
+      return nodeUsable
+        ? { beeUrl: beeUrl ?? '', onProgress, transport: providerTransport }
+        : null;
+    }
+    return beeUrl && nodeUsable
+      ? { beeUrl, postageBatchId: batchId, onProgress }
+      : null;
+  }, [nodeUsable, batchId, onProgress, providerTransport]);
 
   const docStorage: SwarmDocumentStorage | null = useMemo(() => {
     if (!storageConfig) return null;
@@ -181,6 +236,9 @@ export const useSwarmStorage = (docId: string) => {
       ...storageConfig,
       ownerPrivateKey: keys.owner as `0x${string}`,
       documentKey: keys.doc,
+      // Under a provider the feed is signed by the browser's origin-scoped
+      // identity, so the key above is used only to decrypt.
+      transport: storageConfig.transport,
     });
   }, [storageConfig, docId]);
 
@@ -214,7 +272,7 @@ export const useSwarmStorage = (docId: string) => {
   }, []);
 
   useEffect(() => {
-    if (!beeUrl || nodeState.kind === 'connecting') return;
+    if (!beeUrl || providerTransport || nodeState.kind === 'connecting') return;
     let cancelled = false;
     const ping = async () => {
       try {
@@ -230,12 +288,12 @@ export const useSwarmStorage = (docId: string) => {
       cancelled = true;
       clearInterval(id);
     };
-  }, [nodeState.kind, probe]);
+  }, [nodeState.kind, probe, providerTransport]);
 
   // Stamp health follows whichever batch is in use, including one bought
   // mid-session.
   useEffect(() => {
-    if (!beeUrl || !batchId) return;
+    if (!beeUrl || !batchId || providerTransport) return;
     let cancelled = false;
     checkStampHealth({ beeUrl }, batchId)
       .then((health) => !cancelled && setStampHealth(health))
@@ -243,7 +301,7 @@ export const useSwarmStorage = (docId: string) => {
     return () => {
       cancelled = true;
     };
-  }, [batchId]);
+  }, [batchId, providerTransport]);
 
   return {
     ...imageFns,
@@ -258,11 +316,19 @@ export const useSwarmStorage = (docId: string) => {
     /** Inputs for `diagnoseSwarm`, kept current while the document is open. */
     diagnosticsInput: {
       online,
-      nodeReachable: nodeReachable && nodeState.kind !== 'unreachable',
+      nodeReachable: providerTransport
+        ? true
+        : nodeReachable && nodeState.kind !== 'unreachable',
       stamp: stampHealth,
       hasBatch: Boolean(batchId),
       localFallback: 'browser' as const,
+      provider: providerStatus
+        ? { canWrite: providerStatus.canWrite, reason: providerStatus.reason }
+        : undefined,
     },
     recheck,
+    grantAccess,
+    /** True when the browser, not this app, manages postage. */
+    managesPostage: Boolean(providerTransport),
   };
 };

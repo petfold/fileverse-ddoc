@@ -87,7 +87,7 @@ export const makeFeedTopic = (name: string): Uint8Array =>
   keccak256(utf8(name), 'bytes');
 
 /** Sequence-feed SOC identifier: keccak256(topic || index_be64). */
-const feedIdentifier = (topic: Uint8Array, index: number): Uint8Array =>
+export const feedIdentifier = (topic: Uint8Array, index: number): Uint8Array =>
   keccak256(concatBytes(topic, uint64BigEndian(index)), 'bytes');
 
 /** Ethereum address (lowercase, no 0x) owning feeds signed with this key. */

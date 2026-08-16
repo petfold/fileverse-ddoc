@@ -71,6 +71,19 @@ export {
 } from './package/utils/swarm-document-storage';
 export { SwarmTimeoutError } from './package/utils/swarm-common';
 export {
+  detectSwarmTransport,
+  createBeeHttpTransport,
+  createSwarmProviderTransport,
+  probeLatestFeedIndex,
+} from './package/utils/swarm-transport';
+export type {
+  SwarmTransport,
+  SwarmTransportStatus,
+  SwarmProvider,
+  BeeHttpTransportConfig,
+  TransportDetectionConfig,
+} from './package/utils/swarm-transport';
+export {
   diagnoseSwarm,
   primarySwarmCondition,
 } from './package/utils/swarm-diagnostics';
