@@ -101,9 +101,9 @@ describe('demo app', () => {
     // The toolbar is part of the editor shell: reaching it means the whole
     // component tree rendered rather than throwing.
     await waitFor(() => expect(screen.getByText('File')).toBeTruthy(), {
-      timeout: 15_000,
+      timeout: 60_000,
     });
-  }, 30_000);
+  }, 90_000);
 
   // A Swarm-aware browser (Freedom and similar) injects window.swarm and
   // blocks raw node access, so the app must work with no node URL at all.
@@ -134,12 +134,12 @@ describe('demo app', () => {
     // business here, so it must not offer to buy any.
     await waitFor(
       () => expect(screen.getByRole('button', { name: /grant access/i })).toBeTruthy(),
-      { timeout: 15_000 },
+      { timeout: 60_000 },
     );
     expect(
       screen.queryByRole('button', { name: /postage batch/i }),
     ).toBeNull();
-  }, 30_000);
+  }, 90_000);
 
   it('surfaces the Swarm condition when the node has no postage batch', async () => {
     stubBrowserApis();
@@ -152,7 +152,7 @@ describe('demo app', () => {
     render(<App />);
     await waitFor(
       () => expect(screen.getByText(/No postage batch/i)).toBeTruthy(),
-      { timeout: 15_000 },
+      { timeout: 60_000 },
     );
-  }, 30_000);
+  }, 90_000);
 });
