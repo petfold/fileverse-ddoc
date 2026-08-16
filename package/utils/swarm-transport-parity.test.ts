@@ -167,10 +167,11 @@ const overHttp = () => {
   });
 };
 
+// No owner key: through a provider the browser owns the feeds it creates,
+// which is how a document authored in such a browser works.
 const overProvider = () =>
   createSwarmDocumentStorage({
     beeUrl: 'http://unused.invalid',
-    ownerPrivateKey: OWNER_KEY,
     documentKey,
     transport: createSwarmProviderTransport(fakeProviderNode()),
   });
@@ -215,12 +216,12 @@ describe.each([
 });
 
 describe('what differs between the two', () => {
-  it('takes the owner from the local key over http, from the provider otherwise', async () => {
+  it('takes the owner from the key when there is one, from the provider otherwise', async () => {
     const httpOwner = await overHttp().feedOwner();
     const providerOwner = await overProvider().feedOwner();
     expect(httpOwner).not.toBe(providerOwner);
-    // The provider's origin-scoped identity, not our key — which is why a
-    // key shared in a link cannot grant write access there.
+    // With no key of its own, the document belongs to the provider's
+    // origin-scoped identity.
     expect(providerOwner).toBe('abc0000000000000000000000000000000000001');
   });
 
@@ -251,5 +252,84 @@ describe('what differs between the two', () => {
     const stored = [...node.chunks.values()][0];
     expect(stored.slice(SOC_HEADER + 8)).toEqual(payload);
     expect(fromBase64(toBase64(payload))).toEqual(payload);
+  });
+});
+
+/**
+ * A document opened from someone else's link. Its feed belongs to the key
+ * in that link, not to whatever identity the transport signs with — which
+ * is the whole point of a shared link, and was where the demo failed in
+ * Freedom: it looked the document up under the browser's own identity and
+ * found nothing.
+ */
+describe('a document shared by link', () => {
+  const sharedKey =
+    '0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318' as const;
+
+  it('reads from the owner in the link, not the provider identity', async () => {
+    const provider = fakeProviderNode();
+    const transport = createSwarmProviderTransport(provider);
+    const storage = createSwarmDocumentStorage({
+      beeUrl: 'http://unused.invalid',
+      ownerPrivateKey: sharedKey,
+      documentKey,
+      transport,
+    });
+
+    const linkOwner = await storage.feedOwner();
+    const providerOwner = await transport.feedOwner();
+    expect(linkOwner).not.toBe(providerOwner);
+    // The address the link's key derives, so the lookup finds the feed.
+    expect(linkOwner).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('does not need a signing identity merely to read', async () => {
+    const calls: string[] = [];
+    const inner = fakeProviderNode();
+    const storage = createSwarmDocumentStorage({
+      beeUrl: 'http://unused.invalid',
+      ownerPrivateKey: sharedKey,
+      documentKey,
+      transport: createSwarmProviderTransport({
+        request: (args) => {
+          calls.push(args.method);
+          return inner.request(args);
+        },
+      }),
+    });
+
+    await storage.loadDocument('shared-doc');
+    // swarm_getSigningIdentity sits behind a consent prompt; asking for it
+    // to read would make viewing a link require granting write access.
+    expect(calls).not.toContain('swarm_getSigningIdentity');
+  });
+
+  it('refuses to save it, explaining that the browser signs as itself', async () => {
+    const storage = createSwarmDocumentStorage({
+      beeUrl: 'http://unused.invalid',
+      ownerPrivateKey: sharedKey,
+      documentKey,
+      transport: createSwarmProviderTransport(fakeProviderNode()),
+    });
+
+    expect(await storage.canWriteDocument()).toBe(false);
+    await expect(storage.saveDocument('shared-doc', 'edit')).rejects.toThrow(
+      /read-only here/i,
+    );
+  });
+
+  it('still writes freely over the node API, where the key signs', async () => {
+    const node = fakeBeeNode();
+    vi.stubGlobal('fetch', node.handler);
+    const storage = createSwarmDocumentStorage({
+      beeUrl: 'http://bee.invalid',
+      postageBatchId: 'ab'.repeat(32),
+      ownerPrivateKey: sharedKey,
+      documentKey,
+    });
+    expect(await storage.canWriteDocument()).toBe(true);
+    await expect(
+      storage.saveDocument('shared-doc', 'edit'),
+    ).resolves.toMatchObject({ index: 0 });
   });
 });

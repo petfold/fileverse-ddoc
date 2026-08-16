@@ -37,12 +37,17 @@ import { SwarmTransport, createBeeHttpTransport } from './swarm-transport';
 
 export interface SwarmDocumentStorageConfig extends SwarmFeedConfig {
   /**
-   * secp256k1 private key (0x-hex) owning the document feeds. An ordinary
+   * secp256k1 private key (0x-hex) owning the document's feed. An ordinary
    * Ethereum account key works; generate a dedicated one with viem's
    * `generatePrivateKey()` if the wallet key should not sign storage
    * updates silently.
+   *
+   * Optional when a provider transport supplies the identity: there the
+   * browser owns the feeds it creates. Supply it to open a document whose
+   * key came from elsewhere — a shared link — which is then readable but,
+   * through a provider, not writable.
    */
-  ownerPrivateKey: `0x${string}`;
+  ownerPrivateKey?: `0x${string}`;
   /**
    * Base64-encoded 32-byte AES key encrypting snapshots; create one with
    * {@link generateDocumentKey}. Omit to store documents in plaintext
@@ -129,14 +134,41 @@ export const createSwarmDocumentStorage = (
       ...config,
       ownerPrivateKey: config.ownerPrivateKey,
     });
-  // Over HTTP the owner is derived from the local key and is known
-  // synchronously; a provider supplies its own origin-scoped identity, so
-  // the address is resolved on first use and cached.
+  // Whose feed this document lives on. A document key identifies its own
+  // feed, so when one is configured — including a key that arrived in a
+  // shared link — that is the owner to read from, whatever transport is in
+  // use. Only when there is no key does the transport's own identity apply.
+  //
+  // This is what makes a shared document readable through a provider: the
+  // provider signs with an origin-scoped identity of its own, and looking
+  // the document up under *that* address would silently find nothing. It
+  // also keeps reading free of consent prompts, since no signing identity
+  // is needed to read.
   let ownerPromise: Promise<string> | null = null;
-  const owner = () => (ownerPromise ??= transport.feedOwner());
-  const ownerAddress = config.transport
-    ? ''
-    : feedOwnerAddress(config.ownerPrivateKey);
+  const owner = () =>
+    config.ownerPrivateKey
+      ? Promise.resolve(feedOwnerAddress(config.ownerPrivateKey))
+      : (ownerPromise ??= transport.feedOwner());
+  const ownerAddress = config.ownerPrivateKey
+    ? feedOwnerAddress(config.ownerPrivateKey)
+    : '';
+
+  /**
+   * Whether this transport can write *this* document. Over HTTP the
+   * configured key signs, so it always can. A provider signs only as
+   * itself, so it can write a document only if that document's feed is its
+   * own — a document opened from someone else's link is readable but not
+   * writable there.
+   */
+  const canWriteDocument = async (): Promise<boolean> => {
+    if (!config.transport) return true;
+    if (!config.ownerPrivateKey) return true;
+    try {
+      return (await transport.feedOwner()) === ownerAddress;
+    } catch {
+      return false;
+    }
+  };
   // Feed-index cache: `GET /feeds` on a live node resolves over the network
   // (seconds, and slowest when the feed does not exist yet), so only the
   // first operation per document pays for it; afterwards saves advance the
@@ -185,8 +217,10 @@ export const createSwarmDocumentStorage = (
   return {
     /** Feed owner over HTTP; empty when a transport supplies the identity. */
     ownerAddress,
-    /** Address that signs this document's feed, whichever transport is used. */
+    /** Address owning this document's feed. */
     feedOwner: owner,
+    /** False when the transport cannot sign for this document's feed. */
+    canWriteDocument,
     transport,
 
     /**
@@ -197,6 +231,13 @@ export const createSwarmDocumentStorage = (
       ddocId: string,
       content: string | Uint8Array<ArrayBuffer>,
     ): Promise<DocumentVersion> => {
+      if (!(await canWriteDocument())) {
+        throw new Error(
+          'This document belongs to another identity. Your browser signs ' +
+            'Swarm feeds with its own key and cannot write to it, so it is ' +
+            'read-only here.',
+        );
+      }
       const plaintext =
         typeof content === 'string'
           ? new TextEncoder().encode(content)
