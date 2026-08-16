@@ -157,3 +157,63 @@ describe('diagnoseSwarm', () => {
     expect(without?.detail).toContain('not being stored anywhere else');
   });
 });
+
+// Reached through an injected provider (Freedom and similar), postage and
+// node lifecycle belong to the browser, not to the page.
+describe('provider-backed nodes', () => {
+  const viaProvider = (
+    provider: SwarmDiagnosticsInput['provider'],
+  ): SwarmDiagnosticsInput => ({
+    online: true,
+    nodeReachable: true,
+    hasBatch: false,
+    stamp: null,
+    localFallback: 'browser',
+    provider,
+  });
+
+  it('says nothing while the provider can publish', () => {
+    expect(diagnoseSwarm(viaProvider({ canWrite: true }))).toEqual([]);
+  });
+
+  it('never asks the user to buy postage the provider manages', () => {
+    const condition = primarySwarmCondition(
+      viaProvider({ canWrite: false, reason: 'no-usable-stamps' }),
+    );
+    expect(condition?.kind).toBe('provider-cannot-publish');
+    const kinds = condition!.remedies.map((r) => r.kind);
+    expect(kinds).not.toContain('buy-batch');
+    expect(kinds).not.toContain('top-up-batch');
+  });
+
+  it('offers consent, and only consent, when access was never granted', () => {
+    const condition = primarySwarmCondition(
+      viaProvider({ canWrite: false, reason: 'not-connected' }),
+    );
+    expect(condition?.kind).toBe('provider-not-connected');
+    expect(condition?.remedies.map((r) => r.kind)).toEqual(['grant-access']);
+  });
+
+  it('explains each reason code in its own terms', () => {
+    const titles = ['node-stopped', 'ultra-light-mode', 'node-not-ready'].map(
+      (reason) =>
+        primarySwarmCondition(viaProvider({ canWrite: false, reason }))!.title,
+    );
+    expect(new Set(titles).size).toBe(3);
+  });
+
+  it('falls back to reporting an unknown code rather than hiding it', () => {
+    const condition = primarySwarmCondition(
+      viaProvider({ canWrite: false, reason: 'something-new' }),
+    );
+    expect(condition?.detail).toContain('something-new');
+  });
+
+  it('still reports the browser being offline first', () => {
+    const conditions = diagnoseSwarm({
+      ...viaProvider({ canWrite: false, reason: 'node-stopped' }),
+      online: false,
+    });
+    expect(conditions[0].kind).toBe('offline');
+  });
+});

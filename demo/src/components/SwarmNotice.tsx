@@ -32,6 +32,8 @@ export interface SwarmNoticeProps {
   onRetry: () => void;
   /** A batch became usable: adopt it and resume saving. */
   onBatchReady: (_batchId: string) => void;
+  /** Ask a provider for publishing consent. */
+  onGrantAccess?: () => void;
 }
 
 export const SwarmNotice = ({
@@ -40,6 +42,7 @@ export const SwarmNotice = ({
   batchId,
   onRetry,
   onBatchReady,
+  onGrantAccess,
 }: SwarmNoticeProps) => {
   const [dismissed, setDismissed] = useState(false);
   const [panel, setPanel] = useState<SwarmRemedyKind | null>(null);
@@ -84,7 +87,9 @@ export const SwarmNotice = ({
                 onClick={() =>
                   remedy.kind === 'retry'
                     ? onRetry()
-                    : setPanel(panel === remedy.kind ? null : remedy.kind)
+                    : remedy.kind === 'grant-access'
+                      ? onGrantAccess?.()
+                      : setPanel(panel === remedy.kind ? null : remedy.kind)
                 }
                 className="h-7 px-3 rounded border color-border-default font-medium whitespace-nowrap"
               >

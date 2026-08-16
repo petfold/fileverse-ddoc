@@ -2,20 +2,16 @@ import {
   SwarmFeedConfig,
   feedOwnerAddress,
   makeFeedTopic,
-  readFeedUpdate,
-  readLatestFeedIndex,
   uint64BigEndian,
-  writeFeedUpdate,
 } from './swarm-feeds';
 import {
   bytesToHex,
   concatBytes,
   fromBase64,
   hexToBytes,
-  readWithProgress,
-  swarmFetch,
   toBase64,
 } from './swarm-common';
+import { SwarmTransport, createBeeHttpTransport } from './swarm-transport';
 
 /**
  * Document persistence on Ethereum Swarm.
@@ -53,11 +49,22 @@ export interface SwarmDocumentStorageConfig extends SwarmFeedConfig {
    * (public documents).
    */
   documentKey?: string;
+  /**
+   * How to reach Swarm. Defaults to this config's Bee node; pass a
+   * provider transport (or the result of `detectSwarmTransport`) to run in
+   * a browser that exposes `window.swarm` instead of a raw node API.
+   */
+  transport?: SwarmTransport;
 }
 
-/** True when this storage can write — i.e. a postage batch is configured. */
+/**
+ * Whether this storage can write. Over the Bee HTTP API that means a
+ * postage batch is configured; a provider transport manages postage
+ * itself, so writing depends on its permission grant instead — ask
+ * `transport.status()` there.
+ */
 export const canSaveToSwarm = (config: SwarmDocumentStorageConfig): boolean =>
-  Boolean(config.postageBatchId);
+  Boolean(config.transport?.managesPostage || config.postageBatchId);
 
 export interface DocumentSnapshot {
   /** Decrypted snapshot bytes as saved. */
@@ -116,7 +123,20 @@ const unseal = async (key: CryptoKey, blob: Uint8Array) => {
 export const createSwarmDocumentStorage = (
   config: SwarmDocumentStorageConfig,
 ) => {
-  const ownerAddress = feedOwnerAddress(config.ownerPrivateKey);
+  const transport =
+    config.transport ??
+    createBeeHttpTransport({
+      ...config,
+      ownerPrivateKey: config.ownerPrivateKey,
+    });
+  // Over HTTP the owner is derived from the local key and is known
+  // synchronously; a provider supplies its own origin-scoped identity, so
+  // the address is resolved on first use and cached.
+  let ownerPromise: Promise<string> | null = null;
+  const owner = () => (ownerPromise ??= transport.feedOwner());
+  const ownerAddress = config.transport
+    ? ''
+    : feedOwnerAddress(config.ownerPrivateKey);
   // Feed-index cache: `GET /feeds` on a live node resolves over the network
   // (seconds, and slowest when the feed does not exist yet), so only the
   // first operation per document pays for it; afterwards saves advance the
@@ -139,12 +159,9 @@ export const createSwarmDocumentStorage = (
     feedIndex: number,
     timestamp: number,
   ): Promise<DocumentSnapshot> => {
-    config.onProgress?.({ stage: 'download', status: 'start' });
-    const response = await swarmFetch(config, `/bytes/${reference}`);
-    if (response.status === 404) {
-      throw new Error(`Snapshot not found on Swarm: ${reference}`);
-    }
-    let bytes: Uint8Array = await readWithProgress(response, config.onProgress);
+    let bytes: Uint8Array = await transport.downloadData(reference, {
+      onProgress: config.onProgress,
+    });
     const key = await cryptoKey('decrypt');
     if (key) {
       config.onProgress?.({ stage: 'decrypt', status: 'start' });
@@ -166,7 +183,11 @@ export const createSwarmDocumentStorage = (
   });
 
   return {
+    /** Feed owner over HTTP; empty when a transport supplies the identity. */
     ownerAddress,
+    /** Address that signs this document's feed, whichever transport is used. */
+    feedOwner: owner,
+    transport,
 
     /**
      * Upload a snapshot and advance the document's feed to it.
@@ -180,49 +201,20 @@ export const createSwarmDocumentStorage = (
         typeof content === 'string'
           ? new TextEncoder().encode(content)
           : content;
-      if (!config.postageBatchId) {
-        throw new Error(
-          'Saving to Swarm needs a postage batch. This node has none, so the ' +
-            'document is read-only here (reading never needs a stamp).',
-        );
-      }
       const key = await cryptoKey('encrypt');
       const blob = key ? await seal(key, plaintext) : plaintext;
-
-      config.onProgress?.({
-        stage: 'upload',
-        status: 'start',
-        total: blob.length,
-      });
-      const response = await swarmFetch(config, '/bytes', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/octet-stream',
-          'swarm-postage-batch-id': config.postageBatchId,
-        },
-        body: blob,
-      });
-      if (response.status === 404) {
-        throw new Error('Snapshot upload failed: node rejected the upload');
-      }
-      const { reference } = (await response.json()) as { reference: string };
-      config.onProgress?.({
-        stage: 'upload',
-        status: 'done',
-        loaded: blob.length,
-        total: blob.length,
+      const reference = await transport.uploadData(blob, {
+        onProgress: config.onProgress,
       });
 
       const topic = makeDocumentFeedTopic(ddocId);
-      let index = nextIndexCache.get(ddocId);
-      if (index === undefined) {
-        const latest = await readLatestFeedIndex(config, ownerAddress, topic);
-        index = latest ? latest.nextIndex : 0;
-      }
+      const cached = nextIndexCache.get(ddocId);
+      const index =
+        cached ??
+        (await transport.latestFeedIndex(await owner(), topic))?.nextIndex ??
+        0;
       const timestamp = Math.floor(Date.now() / 1000);
-      await writeFeedUpdate(
-        config,
-        config.ownerPrivateKey,
+      await transport.writeFeedUpdate(
         topic,
         index,
         concatBytes(uint64BigEndian(timestamp), hexToBytes(reference)),
@@ -234,12 +226,12 @@ export const createSwarmDocumentStorage = (
     /** Load the latest snapshot, or `null` for a never-saved document. */
     loadDocument: async (ddocId: string): Promise<DocumentSnapshot | null> => {
       const topic = makeDocumentFeedTopic(ddocId);
-      const latest = await readLatestFeedIndex(config, ownerAddress, topic);
+      const feedOwner = await owner();
+      const latest = await transport.latestFeedIndex(feedOwner, topic);
       if (!latest) return null;
       nextIndexCache.set(ddocId, latest.nextIndex);
-      const payload = await readFeedUpdate(
-        config,
-        ownerAddress,
+      const payload = await transport.readFeedUpdate(
+        feedOwner,
         topic,
         latest.index,
       );
@@ -254,7 +246,11 @@ export const createSwarmDocumentStorage = (
       index: number,
     ): Promise<DocumentSnapshot | null> => {
       const topic = makeDocumentFeedTopic(ddocId);
-      const payload = await readFeedUpdate(config, ownerAddress, topic, index);
+      const payload = await transport.readFeedUpdate(
+        await owner(),
+        topic,
+        index,
+      );
       if (!payload) return null;
       const { timestamp, reference } = parseFeedPayload(payload);
       return fetchSnapshot(reference, index, timestamp);
@@ -265,11 +261,12 @@ export const createSwarmDocumentStorage = (
       ddocId: string,
     ): Promise<DocumentVersion[]> => {
       const topic = makeDocumentFeedTopic(ddocId);
-      const latest = await readLatestFeedIndex(config, ownerAddress, topic);
+      const feedOwner = await owner();
+      const latest = await transport.latestFeedIndex(feedOwner, topic);
       if (!latest) return [];
       const payloads = await Promise.all(
         Array.from({ length: latest.index + 1 }, (_, i) =>
-          readFeedUpdate(config, ownerAddress, topic, i),
+          transport.readFeedUpdate(feedOwner, topic, i),
         ),
       );
       return payloads.flatMap((payload, index) => {
