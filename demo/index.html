@@ -54,13 +54,17 @@
         that has not cached these chunks retrieves them from the network —
         slow links make this take a few minutes. Later loads are fast.
       </div>
+      <div class="slow" id="boot-retrying" hidden>
+        Your Swarm node was still connecting to peers, so the app code could
+        not be fetched. Retrying…
+      </div>
       <div class="slow failed" id="boot-failed" hidden>
-        <p><strong>The app code did not finish downloading.</strong></p>
+        <p><strong>The app code could not be downloaded.</strong></p>
         <p>
-          A Swarm node that has just started is still finding peers, and a
-          large file requested during that window can arrive incomplete. The
-          content is fine — retrying usually works, and is fast once the node
-          has warmed up.
+          A Swarm node answers requests as soon as it starts, but cannot
+          serve anything until it has connected to peers — a page opened in
+          that window fails, and browsers do not retry scripts by themselves.
+          One automatic retry has already been attempted.
         </p>
         <button type="button" id="boot-reload">Reload</button>
       </div>
@@ -73,22 +77,41 @@
       // large file incomplete — nothing else on the page will ever say so,
       // and the boot screen would spin until the tab is closed.
       var BOOT_DEADLINE_SECONDS = 45;
+      // A node that has just started answers HTTP before it has peers and
+      // returns 502 for a few seconds — measured at ~5s from cold. That is
+      // long enough to kill a page load and short enough that retrying
+      // works, so retry once automatically before asking the visitor to.
+      var RETRY_DELAY_MS = 6000;
+      var RETRY_FLAG = 'ddoc-boot-retried';
       var started = Date.now();
       var elapsed = document.getElementById('boot-elapsed');
       var slow = document.getElementById('boot-slow');
+      var retrying = document.getElementById('boot-retrying');
       var failed = document.getElementById('boot-failed');
       var reload = document.getElementById('boot-reload');
       var timer = null;
 
       reload.addEventListener('click', function () {
+        try { sessionStorage.removeItem(RETRY_FLAG); } catch (e) { /* private mode */ }
         window.location.reload();
       });
 
+      function alreadyRetried() {
+        try { return sessionStorage.getItem(RETRY_FLAG) === '1'; }
+        catch (e) { return true; }  // cannot track retries: do not loop
+      }
+
       function reportFailure() {
         if (!document.getElementById('boot')) return;
-        slow.hidden = true;
-        failed.hidden = false;
         if (timer) clearInterval(timer);
+        slow.hidden = true;
+        if (alreadyRetried()) {
+          failed.hidden = false;
+          return;
+        }
+        try { sessionStorage.setItem(RETRY_FLAG, '1'); } catch (e) { /* ignore */ }
+        retrying.hidden = false;
+        setTimeout(function () { window.location.reload(); }, RETRY_DELAY_MS);
       }
 
       // A module that 404s, or arrives truncated and fails to parse, raises
