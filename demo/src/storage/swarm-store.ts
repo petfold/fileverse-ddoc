@@ -211,9 +211,14 @@ export const useSwarmStorage = (docId: string) => {
   const [nodeReachable, setNodeReachable] = useState(true);
   // Writing needs both a batch and a node that is actually answering: a
   // node that stops mid-session must hold content back, not fail saves.
-  const canWrite = providerTransport
-    ? Boolean(providerStatus?.canWrite)
-    : nodeState.kind === 'ready' && nodeReachable;
+  // Through a provider, a document opened from someone else's link cannot
+  // be written: the browser signs only as itself. Declared before canWrite,
+  // which reads it during render.
+  const [documentWritable, setDocumentWritable] = useState(true);
+  const canWrite =
+    (providerTransport
+      ? Boolean(providerStatus?.canWrite)
+      : nodeState.kind === 'ready' && nodeReachable) && documentWritable;
   const batchId = nodeState.kind === 'ready' ? nodeState.batchId : undefined;
   /** Usable for reads as soon as the node answers, batch or not. */
   const nodeUsable = nodeState.kind === 'ready' || nodeState.kind === 'read-only';
@@ -231,16 +236,36 @@ export const useSwarmStorage = (docId: string) => {
 
   const docStorage: SwarmDocumentStorage | null = useMemo(() => {
     if (!storageConfig) return null;
+    // A link that carries an owner key names the document's feed, and that
+    // is what must be read from — including through a provider, which signs
+    // as itself and would otherwise look the document up under the browser's
+    // own identity and find nothing. Without such a link, let the provider
+    // own the documents this browser creates, so they stay writable.
+    const sharedOwner = readHashKeys()?.owner;
     const keys = resolveKeys(docId, generatePrivateKey, generateDocumentKey);
+    const ownerPrivateKey =
+      providerTransport && !sharedOwner
+        ? undefined
+        : (keys.owner as `0x${string}`);
     return createSwarmDocumentStorage({
       ...storageConfig,
-      ownerPrivateKey: keys.owner as `0x${string}`,
+      ownerPrivateKey,
       documentKey: keys.doc,
-      // Under a provider the feed is signed by the browser's origin-scoped
-      // identity, so the key above is used only to decrypt.
       transport: storageConfig.transport,
     });
-  }, [storageConfig, docId]);
+  }, [storageConfig, docId, providerTransport]);
+
+  useEffect(() => {
+    if (!docStorage) return;
+    let cancelled = false;
+    docStorage
+      .canWriteDocument()
+      .then((writable) => !cancelled && setDocumentWritable(writable))
+      .catch(() => !cancelled && setDocumentWritable(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [docStorage]);
 
   const imageFns = useMemo(
     () =>
