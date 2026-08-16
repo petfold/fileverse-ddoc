@@ -24,6 +24,16 @@
     #boot svg { color: #dd6b00; animation: boot-pulse 1.8s ease-in-out infinite; }
     #boot .elapsed { font-variant-numeric: tabular-nums; font-size: 12px; }
     #boot .slow { max-width: 32rem; font-size: 12px; }
+    #boot .failed p { margin: 0 0 0.5rem; }
+    #boot .failed button {
+      font: inherit;
+      padding: 0.4rem 0.9rem;
+      border: 1px solid currentColor;
+      border-radius: 4px;
+      background: none;
+      color: inherit;
+      cursor: pointer;
+    }
     @keyframes boot-pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.35 } }
     @media (prefers-reduced-motion: reduce) { #boot svg { animation: none } }
     @media (prefers-color-scheme: dark) { #boot { color: #a39b8f } }
@@ -44,18 +54,55 @@
         that has not cached these chunks retrieves them from the network —
         slow links make this take a few minutes. Later loads are fast.
       </div>
+      <div class="slow failed" id="boot-failed" hidden>
+        <p><strong>The app code did not finish downloading.</strong></p>
+        <p>
+          A Swarm node that has just started is still finding peers, and a
+          large file requested during that window can arrive incomplete. The
+          content is fine — retrying usually works, and is fast once the node
+          has warmed up.
+        </p>
+        <button type="button" id="boot-reload">Reload</button>
+      </div>
     </div>
   </div>
   <script>
     (function () {
+      // Waiting is normal here; waiting forever is not. If a script fails
+      // to load — which a just-started Swarm node can cause by delivering a
+      // large file incomplete — nothing else on the page will ever say so,
+      // and the boot screen would spin until the tab is closed.
+      var BOOT_DEADLINE_SECONDS = 45;
       var started = Date.now();
       var elapsed = document.getElementById('boot-elapsed');
       var slow = document.getElementById('boot-slow');
-      var timer = setInterval(function () {
+      var failed = document.getElementById('boot-failed');
+      var reload = document.getElementById('boot-reload');
+      var timer = null;
+
+      reload.addEventListener('click', function () {
+        window.location.reload();
+      });
+
+      function reportFailure() {
+        if (!document.getElementById('boot')) return;
+        slow.hidden = true;
+        failed.hidden = false;
+        if (timer) clearInterval(timer);
+      }
+
+      // A module that 404s, or arrives truncated and fails to parse, raises
+      // an error event on the window rather than anywhere visible.
+      window.addEventListener('error', function (event) {
+        if (event.target && event.target.tagName === 'SCRIPT') reportFailure();
+      }, true);
+
+      timer = setInterval(function () {
         if (!document.getElementById('boot')) return clearInterval(timer);
         var s = Math.floor((Date.now() - started) / 1000);
         elapsed.textContent = s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + ('0' + (s % 60)).slice(-2) + 's';
         if (s > 8) slow.hidden = false;
+        if (s >= BOOT_DEADLINE_SECONDS) reportFailure();
       }, 500);
     })();
   </script>
