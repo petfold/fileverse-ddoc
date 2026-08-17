@@ -25,7 +25,8 @@
     #boot .elapsed { font-variant-numeric: tabular-nums; font-size: 12px; }
     #boot .slow { max-width: 32rem; font-size: 12px; }
     #boot .failed p { margin: 0 0 0.5rem; }
-    #boot .failed button {
+    #boot .slow p { margin: 0.5rem 0 0; }
+    #boot button {
       font: inherit;
       padding: 0.4rem 0.9rem;
       border: 1px solid currentColor;
@@ -56,7 +57,8 @@
       </div>
       <div class="slow" id="boot-retrying" hidden>
         Your Swarm node was still connecting to peers, so the app code could
-        not be fetched. Retrying…
+        not be fetched. Retrying — <span id="boot-attempt"></span>…
+        <p><button type="button" id="boot-reload-now">Reload now</button></p>
       </div>
       <div class="slow failed" id="boot-failed" hidden>
         <p><strong>The app code could not be downloaded.</strong></p>
@@ -64,7 +66,7 @@
           A Swarm node answers requests as soon as it starts, but cannot
           serve anything until it has connected to peers — a page opened in
           that window fails, and browsers do not retry scripts by themselves.
-          One automatic retry has already been attempted.
+          Several automatic retries have already been attempted.
         </p>
         <button type="button" id="boot-reload">Reload</button>
       </div>
@@ -78,40 +80,65 @@
       // and the boot screen would spin until the tab is closed.
       var BOOT_DEADLINE_SECONDS = 45;
       // A node that has just started answers HTTP before it has peers and
-      // returns 502 for a few seconds — measured at ~5s from cold. That is
-      // long enough to kill a page load and short enough that retrying
-      // works, so retry once automatically before asking the visitor to.
-      var RETRY_DELAY_MS = 6000;
-      var RETRY_FLAG = 'ddoc-boot-retried';
+      // fails requests for a while — ~5s from cold, longer when handshakes
+      // are slow. One retry is not enough, and the reload navigation itself
+      // can HANG at such a node (it applies no deadline of its own), which
+      // used to strand the visitor on a frozen "Retrying…" screen. So:
+      // several retries with a widening gap, a watchdog in case the reload
+      // navigation never completes, and a button as the manual way out.
+      var MAX_RETRIES = 4;
+      var RETRY_DELAYS_MS = [3000, 6000, 12000, 24000];
+      var RELOAD_WATCHDOG_MS = 10000;
+      var RETRY_KEY = 'ddoc-boot-retries';
       var started = Date.now();
       var elapsed = document.getElementById('boot-elapsed');
       var slow = document.getElementById('boot-slow');
       var retrying = document.getElementById('boot-retrying');
+      var attempt = document.getElementById('boot-attempt');
       var failed = document.getElementById('boot-failed');
-      var reload = document.getElementById('boot-reload');
       var timer = null;
+      var retryScheduled = false;
 
-      reload.addEventListener('click', function () {
-        try { sessionStorage.removeItem(RETRY_FLAG); } catch (e) { /* private mode */ }
-        window.location.reload();
-      });
-
-      function alreadyRetried() {
-        try { return sessionStorage.getItem(RETRY_FLAG) === '1'; }
-        catch (e) { return true; }  // cannot track retries: do not loop
+      function retriesSoFar() {
+        try { return parseInt(sessionStorage.getItem(RETRY_KEY), 10) || 0; }
+        catch (e) { return MAX_RETRIES; }  // cannot track retries: do not loop
       }
+      function setRetries(n) {
+        try { sessionStorage.setItem(RETRY_KEY, String(n)); } catch (e) { /* ignore */ }
+      }
+
+      function manualReload() {
+        setRetries(0);
+        window.location.reload();
+      }
+      document.getElementById('boot-reload').addEventListener('click', manualReload);
+      document.getElementById('boot-reload-now').addEventListener('click', manualReload);
 
       function reportFailure() {
         if (!document.getElementById('boot')) return;
-        if (timer) clearInterval(timer);
+        if (retryScheduled) return;
         slow.hidden = true;
-        if (alreadyRetried()) {
+        var done = retriesSoFar();
+        if (done >= MAX_RETRIES) {
+          retrying.hidden = true;
           failed.hidden = false;
           return;
         }
-        try { sessionStorage.setItem(RETRY_FLAG, '1'); } catch (e) { /* ignore */ }
+        retryScheduled = true;
+        setRetries(done + 1);
+        attempt.textContent = 'attempt ' + (done + 1) + ' of ' + MAX_RETRIES;
+        failed.hidden = true;
         retrying.hidden = false;
-        setTimeout(function () { window.location.reload(); }, RETRY_DELAY_MS);
+        setTimeout(function () {
+          window.location.reload();
+          // If the reload navigation hangs at a node that never times out,
+          // this page stays alive: treat that as a failed attempt and go
+          // again — a fresh navigation replaces the stuck one.
+          setTimeout(function () {
+            retryScheduled = false;
+            reportFailure();
+          }, RELOAD_WATCHDOG_MS);
+        }, RETRY_DELAYS_MS[done] || 24000);
       }
 
       // A module that 404s, or arrives truncated and fails to parse, raises
@@ -121,10 +148,15 @@
       }, true);
 
       timer = setInterval(function () {
-        if (!document.getElementById('boot')) return clearInterval(timer);
+        if (!document.getElementById('boot')) {
+          // The app mounted: this visit succeeded, let a future cold visit
+          // start with a full retry budget again.
+          try { sessionStorage.removeItem(RETRY_KEY); } catch (e) { /* ignore */ }
+          return clearInterval(timer);
+        }
         var s = Math.floor((Date.now() - started) / 1000);
         elapsed.textContent = s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + ('0' + (s % 60)).slice(-2) + 's';
-        if (s > 8) slow.hidden = false;
+        if (s > 8 && retrying.hidden && failed.hidden) slow.hidden = false;
         if (s >= BOOT_DEADLINE_SECONDS) reportFailure();
       }, 500);
     })();
