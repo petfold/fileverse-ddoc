@@ -68,28 +68,56 @@ const readHashKeys = (): { owner: string; doc: string } | null => {
     : null;
 };
 
-const writeHashKeys = (owner: string, doc: string) => {
-  const skey = `skey=${encodeURIComponent(owner)}:${encodeURIComponent(doc)}`;
-  if (!window.location.hash.includes(skey)) {
-    window.history.replaceState(null, '', `#${skey}`);
+/** Document key alone, for a document whose feed the provider owns. */
+const readHashDocKey = (): string | null => {
+  const match = window.location.hash.match(/dkey=([^&]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+};
+
+const writeHash = (fragment: string) => {
+  if (!window.location.hash.includes(fragment)) {
+    window.history.replaceState(null, '', `#${fragment}`);
   }
 };
 
+/**
+ * Which keys this document uses, and what goes in the address bar.
+ *
+ * Two shapes, deliberately distinct. `skey=owner:doc` carries a feed
+ * signing key: whoever holds the link owns the document. `dkey=doc`
+ * carries only the decryption key, for a document whose feed belongs to
+ * the browser's own provider identity.
+ *
+ * Keeping them apart is what lets the app tell "opened from someone
+ * else's link" from "created here" — writing one shape and reading the
+ * other back made every reloaded document look shared, and a document
+ * that looks shared is treated as read-only.
+ */
 const resolveKeys = (
   docId: string,
   generateOwner: () => string,
   generateDoc: () => string,
-): { owner: string; doc: string } => {
+  providerOwnsFeed: boolean,
+): { owner?: string; doc: string } => {
   const ownerStorageKey = 'ddoc-swarm-owner-key';
   const docStorageKey = `ddoc-swarm-doc-key-${docId}`;
   const fromHash = readHashKeys();
+  const doc =
+    fromHash?.doc ??
+    readHashDocKey() ??
+    localStorage.getItem(docStorageKey) ??
+    generateDoc();
+  localStorage.setItem(docStorageKey, doc);
+
+  if (providerOwnsFeed && !fromHash?.owner) {
+    writeHash(`dkey=${encodeURIComponent(doc)}`);
+    return { doc };
+  }
+
   const owner =
     fromHash?.owner ?? localStorage.getItem(ownerStorageKey) ?? generateOwner();
-  const doc =
-    fromHash?.doc ?? localStorage.getItem(docStorageKey) ?? generateDoc();
   localStorage.setItem(ownerStorageKey, owner);
-  localStorage.setItem(docStorageKey, doc);
-  writeHashKeys(owner, doc);
+  writeHash(`skey=${encodeURIComponent(owner)}:${encodeURIComponent(doc)}`);
   return { owner, doc };
 };
 
@@ -234,6 +262,10 @@ export const useSwarmStorage = (docId: string) => {
       : null;
   }, [nodeUsable, batchId, onProgress, providerTransport]);
 
+  // Read once, at mount, before resolveKeys writes anything: afterwards the
+  // address bar carries a key either way, and the two are indistinguishable.
+  const [documentHasOwnKey] = useState(() => Boolean(readHashKeys()?.owner));
+
   const docStorage: SwarmDocumentStorage | null = useMemo(() => {
     if (!storageConfig) return null;
     // A link that carries an owner key names the document's feed, and that
@@ -241,19 +273,20 @@ export const useSwarmStorage = (docId: string) => {
     // as itself and would otherwise look the document up under the browser's
     // own identity and find nothing. Without such a link, let the provider
     // own the documents this browser creates, so they stay writable.
-    const sharedOwner = readHashKeys()?.owner;
-    const keys = resolveKeys(docId, generatePrivateKey, generateDocumentKey);
-    const ownerPrivateKey =
-      providerTransport && !sharedOwner
-        ? undefined
-        : (keys.owner as `0x${string}`);
+    const keys = resolveKeys(
+      docId,
+      generatePrivateKey,
+      generateDocumentKey,
+      Boolean(providerTransport) && !documentHasOwnKey,
+    );
+    const ownerPrivateKey = keys.owner as `0x${string}` | undefined;
     return createSwarmDocumentStorage({
       ...storageConfig,
       ownerPrivateKey,
       documentKey: keys.doc,
       transport: storageConfig.transport,
     });
-  }, [storageConfig, docId, providerTransport]);
+  }, [storageConfig, docId, providerTransport, documentHasOwnKey]);
 
   /**
    * Called when a save is refused because the document belongs to another
@@ -353,6 +386,7 @@ export const useSwarmStorage = (docId: string) => {
     recheck,
     grantAccess,
     markDocumentReadOnly,
+    documentHasOwnKey,
     /** True when the browser, not this app, manages postage. */
     managesPostage: Boolean(providerTransport),
   };
