@@ -1,0 +1,79 @@
+Paste this into Freedom Browser's address bar
+=============================================
+
+bzz://1a1c8011091fdbc72838fa58865a7bde5b48e4d5ab85ecd6f8339b81e13a2d97/?doc=sample-mswwageg#skey=0xb20adf09ff7a371c55404d6ce60918006f6dd4c9564de15dfd12cd7dfe410336:l7sC66hH5M5d5xMnZenZ7ouVQ1%2F%2FCaX6tMVbWrs%2FFSk%3D
+
+
+The same thing in a normal browser, through your own Bee node:
+
+http://localhost:1633/bzz/1a1c8011091fdbc72838fa58865a7bde5b48e4d5ab85ecd6f8339b81e13a2d97/?doc=sample-mswwageg#skey=0xb20adf09ff7a371c55404d6ce60918006f6dd4c9564de15dfd12cd7dfe410336:l7sC66hH5M5d5xMnZenZ7ouVQ1%2F%2FCaX6tMVbWrs%2FFSk%3D
+
+
+Just the app, without the sample document:
+
+bzz://1a1c8011091fdbc72838fa58865a7bde5b48e4d5ab85ecd6f8339b81e13a2d97/
+
+
+Copy the whole of the first line. It is one long line: a truncated paste
+loses the ?doc= part, and the app then opens a new empty document instead
+(the id in the address bar will not read "sample-mswwageg").
+
+
+Starting Freedom Browser from the cloned repo
+---------------------------------------------
+
+    cd ~/projects/freedom-browser
+    npm start
+
+If that aborts with "The SUID sandbox helper binary was found, but is not
+configured correctly", fix it once:
+
+    sudo chown root:root ~/projects/freedom-browser/node_modules/electron/dist/chrome-sandbox
+    sudo chmod 4755 ~/projects/freedom-browser/node_modules/electron/dist/chrome-sandbox
+
+or start it without the sandbox (less secure, no sudo needed):
+
+    cd ~/projects/freedom-browser && npx electron . --no-sandbox
+
+
+What to expect in Freedom
+-------------------------
+
+- The sample document opens with its text, table and photograph,
+  READ-ONLY: the document's feed belongs to the key in the link, and
+  Freedom signs Swarm feeds only as itself.
+- No wallet or vault prompt to read it.
+- Opening the page immediately after starting the browser is the awkward
+  case: the embedded node answers HTTP before it has peers, so the first
+  attempt usually fails. Both the app bundle and the document restore now
+  retry by themselves — the restore up to five times over about 26 seconds,
+  showing "attempt 3 of 5" in the corner.
+- No permission prompt to read this document: reading Swarm needs none, and
+  its feed can only be signed by the key in the link, so a grant would
+  change nothing. Creating your own document in Freedom does ask, since the
+  browser then owns the feed.
+- A bar along the bottom may report your node's state, e.g. browse-only
+  (ultra-light) mode. That concerns publishing, not viewing; switching the
+  node to light mode in Freedom's Swarm settings enables saving.
+
+References
+----------
+
+app:      1a1c8011091fdbc72838fa58865a7bde5b48e4d5ab85ecd6f8339b81e13a2d97
+document: a2327967c081654b8e70f077ef0353c1f591b38c0c2842175b828282959c1464
+image:    7e5d6b378e0438126dc5fb130b7b951731e50c7ab59aec386c4609d1e7cba65e
+built from commit 0b1fb41 on branch feat/swarm-storage-on-main (the
+split-PR build: props PR + Swarm PR rebased onto upstream main, plus the
+boot-retry fix from the first Freedom field test), 2026-08-17.
+
+What changed for Freedom: a cold node no longer strands you on a frozen
+"Retrying…" screen. The boot now retries up to four times with a widening
+gap, shows "attempt N of 4", survives a reload navigation that hangs at a
+peer-less node, and always offers a "Reload now" button.
+
+Verified 2026-08-17: works in Freedom AND Brave — the boot retried and
+recovered by itself on a cold node. All live Swarm suites pass, the sample
+snapshot renders under the new editor schema, and /stewardship confirms
+network-wide retrievability (isRetrievable: true). Previous builds remain
+deployed and read the same document feed: a770f6af… (split build, no boot
+fix) and 9d2e0955… (base v4.3.9).
