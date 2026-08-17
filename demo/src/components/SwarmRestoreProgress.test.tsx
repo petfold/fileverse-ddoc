@@ -104,3 +104,38 @@ describe('SwarmRestoreProgress under a provider', () => {
     expect(active).toBe(true);
   });
 });
+
+// A freshly started browser hits a node that cannot serve yet, so the
+// restore retries; the reader should see that rather than a silent stall.
+describe('SwarmRestoreProgress while retrying', () => {
+  it('says which attempt is running and why', () => {
+    render(
+      <SwarmRestoreProgress
+        nodeState={{ kind: 'read-only', reason: 'ultra-light-mode' }}
+        progress={null}
+        managesPostage
+        attempt={3}
+        maxAttempts={5}
+        onSkip={noop}
+        onRetry={noop}
+      />,
+    );
+    expect(screen.getByText(/attempt 3 of 5/i)).toBeTruthy();
+    expect(screen.getByText(/has just started cannot serve/i)).toBeTruthy();
+  });
+
+  it('says nothing about attempts on the first one', () => {
+    render(
+      <SwarmRestoreProgress
+        nodeState={{ kind: 'read-only', reason: 'ultra-light-mode' }}
+        progress={null}
+        managesPostage
+        attempt={1}
+        maxAttempts={5}
+        onSkip={noop}
+        onRetry={noop}
+      />,
+    );
+    expect(screen.queryByText(/attempt 1 of 5/i)).toBeNull();
+  });
+});
