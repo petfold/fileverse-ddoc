@@ -12,7 +12,7 @@ import { SwarmTransport, createBeeHttpTransport } from './swarm-transport';
  * Ethereum Swarm storage adapter for the storage-agnostic image props.
  *
  * Produces `imageUploadFn` / `imageFetchFn` implementations backed by a Bee
- * node's HTTP API (`POST /bytes`, `GET /bytes/{reference}`), using plain
+ * node's HTTP API (`POST /bzz`, `GET /bzz/{reference}/`), using plain
  * `fetch` and WebCrypto — no extra dependencies. Images are AES-256-GCM
  * encrypted client-side before upload, matching the editor's contract that
  * only ciphertext leaves the client; the Bee node never sees plaintext or
@@ -95,7 +95,7 @@ export const createSwarmImageUploadFn = (
       encryptionKey: toBase64(rawKey),
       nonce: toBase64(nonce),
       authTag: toBase64(authTag),
-      url: `${beeUrl}/bytes/${reference}`,
+      url: `${beeUrl}/bzz/${reference}/`,
       contentRef: reference,
     };
   };
@@ -119,11 +119,14 @@ export const createSwarmImageFetchFn = (
     // Prefer re-deriving the location from this config so documents render
     // even when the uploading host used a different Bee node. Reads need no
     // postage stamp, so this works on any reachable node.
+    // Accepts both shapes: `/bzz/<ref>/` as written now, and the `/bytes/<ref>`
+    // of images stored before the switch.
     const reference =
       contentRef ||
       url
         .slice(stripTrailingSlash(config.beeUrl).length)
-        .replace(/^\/bytes\//, '');
+        .replace(/^\/(bytes|bzz)\//, '')
+        .replace(/\/$/, '');
     const ciphertext = await transport(config).downloadData(reference, {
       onProgress: config.onProgress,
     });

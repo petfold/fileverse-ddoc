@@ -47,6 +47,19 @@ const fakeBeeNode = () => {
 
     if (pathname === '/health') return new Response('{"status":"ok"}');
 
+    // Single-file /bzz upload, as the transport now uses: the reference is
+    // manifest-wrapped, so it also resolves as bzz://<reference>/.
+    if (pathname === '/bzz' && method === 'POST') {
+      const reference = keccak256(body!).slice(2);
+      bytes.set(reference, body!);
+      return new Response(JSON.stringify({ reference }));
+    }
+    if (pathname.startsWith('/bzz/')) {
+      const ref = pathname.slice('/bzz/'.length).replace(/\/$/, '');
+      const stored = bytes.get(ref);
+      return stored ? new Response(stored) : new Response('', { status: 404 });
+    }
+    // Legacy path: documents written before the switch to /bzz.
     if (pathname === '/bytes' && method === 'POST') {
       const reference = keccak256(body!).slice(2);
       bytes.set(reference, body!);
