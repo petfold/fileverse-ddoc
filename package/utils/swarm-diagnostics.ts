@@ -129,12 +129,18 @@ const PROVIDER_REASONS: Record<
   'ultra-light-mode': {
     title: 'Your browser\u2019s Swarm node is in browse-only mode',
     detail:
-      'Ultra-light mode can read Swarm but not publish to it. Switching the node out of that mode enables saving.',
+      'Ultra-light mode can read Swarm but not publish to it, so saving is ' +
+      'disabled at the node, not by this page \u2014 no account or wallet ' +
+      'setup will change that. Switch the node to light mode in your ' +
+      'browser\u2019s Swarm settings to enable publishing.',
   },
   'no-usable-stamps': {
     title: 'Your browser\u2019s Swarm node has no storage credit left',
     detail:
-      'Publishing is paid for with postage, and your browser manages that on your behalf \u2014 it reports none available.',
+      'Publishing is paid for with postage, and your browser manages that ' +
+      'on its own \u2014 it reports none available. Look for postage or ' +
+      'storage credit in your browser\u2019s Swarm settings; this page ' +
+      'cannot buy any on your behalf.',
   },
 };
 
