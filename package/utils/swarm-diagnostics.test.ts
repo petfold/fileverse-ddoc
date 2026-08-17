@@ -217,3 +217,43 @@ describe('provider-backed nodes', () => {
     expect(conditions[0].kind).toBe('offline');
   });
 });
+
+// A document opened from someone else's link cannot be written through a
+// provider whatever the node does, so publishing obstacles are not the
+// reader's problem and asking them to grant access achieves nothing.
+describe('a document that is read-only regardless', () => {
+  const readOnlyDoc = (reason: string): SwarmDiagnosticsInput => ({
+    online: true,
+    nodeReachable: true,
+    hasBatch: false,
+    stamp: null,
+    localFallback: 'browser',
+    documentReadOnly: true,
+    provider: { canWrite: false, reason },
+  });
+
+  it('does not ask for access it has no use for', () => {
+    expect(primarySwarmCondition(readOnlyDoc('not-connected'))).toBeNull();
+  });
+
+  it('stays quiet about postage and node mode too', () => {
+    expect(primarySwarmCondition(readOnlyDoc('no-usable-stamps'))).toBeNull();
+    expect(primarySwarmCondition(readOnlyDoc('ultra-light-mode'))).toBeNull();
+  });
+
+  it('still reports problems that stop it being read', () => {
+    const offline = primarySwarmCondition({
+      ...readOnlyDoc('not-connected'),
+      online: false,
+    });
+    expect(offline?.kind).toBe('offline');
+  });
+
+  it("keeps asking when the document is this browser's own", () => {
+    const own = primarySwarmCondition({
+      ...readOnlyDoc('not-connected'),
+      documentReadOnly: false,
+    });
+    expect(own?.kind).toBe('provider-not-connected');
+  });
+});

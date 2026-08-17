@@ -80,6 +80,13 @@ export interface SwarmDiagnosticsInput {
     /** Provider reason code, e.g. `not-connected`, `no-usable-stamps`. */
     reason?: string;
   };
+  /**
+   * True when this document could not be written from here whatever the
+   * node's state — a document opened from someone else's link, whose feed
+   * only its owner can sign. Reporting a publishing obstacle then would
+   * ask the reader to fix something that changes nothing for them.
+   */
+  documentReadOnly?: boolean;
 }
 
 const SEVERITY_ORDER: Record<SwarmCondition['severity'], number> = {
@@ -179,7 +186,9 @@ export const diagnoseSwarm = (
   }
 
   if (input.provider) {
-    if (!input.provider.canWrite) {
+    // Nothing to grant, buy or switch: this document is not writable from
+    // here in any case, and reading needs no permission.
+    if (!input.provider.canWrite && !input.documentReadOnly) {
       const reason = input.provider.reason ?? 'unknown';
       const known = PROVIDER_REASONS[reason];
       conditions.push({

@@ -164,6 +164,7 @@ function App() {
     grantAccess: grantSwarmAccess,
     markDocumentReadOnly,
     managesPostage: swarmManagesPostage,
+    documentHasOwnKey,
   } = useSwarmStorage(docId);
   const [swarmStatus, setSwarmStatus] = useState<
     | { state: 'off' }
@@ -175,6 +176,9 @@ function App() {
   const swarmCondition = swarmEnabled
     ? primarySwarmCondition({
         ...diagnosticsInput,
+        // Opened from someone else's link: its feed can only be signed by
+        // its owner, so publishing obstacles are not this reader's to fix.
+        documentReadOnly: documentHasOwnKey && swarmManagesPostage,
         lastError:
           swarmStatus.state === 'error' ? swarmStatus.message : undefined,
       })
@@ -265,7 +269,14 @@ function App() {
     // A provider only reveals this app's feed identity once the user has
     // granted access, so before consent there is nothing to look up —
     // open the document and let the notice ask for it.
-    if (diagnosticsInput.provider?.reason === 'not-connected') {
+    // Only a document whose feed owner must come from the provider needs
+    // consent before it can even be found. One opened from a link carries
+    // its own key, and reads need no permission at all — asking for one
+    // would be asking to publish, which this document can never do here.
+    if (
+      diagnosticsInput.provider?.reason === 'not-connected' &&
+      !documentHasOwnKey
+    ) {
       // Remembered, not abandoned: the effect below picks it up again the
       // moment access is granted. Without that the document stayed empty
       // even after the user allowed it.
@@ -322,6 +333,7 @@ function App() {
     nodeState,
     restoreAttempt,
     diagnosticsInput.provider?.reason,
+    documentHasOwnKey,
   ]);
   // Access granted after we deferred: try the restore again, but only
   // while the document is still untouched, so nothing typed is clobbered.
