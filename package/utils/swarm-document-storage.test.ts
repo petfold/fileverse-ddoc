@@ -124,7 +124,7 @@ describe.skipIf(!postageBatchId)(
           'MARKER-doc-plaintext-must-not-leak',
         );
         const raw = new Uint8Array(
-          await (await fetch(`${BEE_URL}/bytes/${reference}`)).arrayBuffer(),
+          await (await fetch(`${BEE_URL}/bzz/${reference}/`)).arrayBuffer(),
         );
         expect(new TextDecoder().decode(raw)).not.toContain('MARKER-doc');
       },

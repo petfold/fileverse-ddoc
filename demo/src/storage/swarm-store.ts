@@ -255,17 +255,16 @@ export const useSwarmStorage = (docId: string) => {
     });
   }, [storageConfig, docId, providerTransport]);
 
-  useEffect(() => {
-    if (!docStorage) return;
-    let cancelled = false;
-    docStorage
-      .canWriteDocument()
-      .then((writable) => !cancelled && setDocumentWritable(writable))
-      .catch(() => !cancelled && setDocumentWritable(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [docStorage]);
+  /**
+   * Called when a save is refused because the document belongs to another
+   * identity. Deliberately not checked up front: asking a provider who it
+   * signs as requires the feed-permission grant, and prompting for write
+   * access merely to *read* a shared document is the wrong trade.
+   */
+  const markDocumentReadOnly = useCallback(
+    () => setDocumentWritable(false),
+    [],
+  );
 
   const imageFns = useMemo(
     () =>
@@ -353,6 +352,7 @@ export const useSwarmStorage = (docId: string) => {
     },
     recheck,
     grantAccess,
+    markDocumentReadOnly,
     /** True when the browser, not this app, manages postage. */
     managesPostage: Boolean(providerTransport),
   };

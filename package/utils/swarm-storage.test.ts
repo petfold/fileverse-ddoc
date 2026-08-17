@@ -44,7 +44,8 @@ describe.skipIf(!postageBatchId)(
 
       // Swarm reference: 64-hex chars; crypto params present and distinct.
       expect(result.contentRef).toMatch(/^[0-9a-f]{64}$/);
-      expect(result.url).toBe(`${BEE_URL}/bytes/${result.contentRef}`);
+      // Manifest-wrapped, so the same reference resolves as bzz:// too.
+      expect(result.url).toBe(`${BEE_URL}/bzz/${result.contentRef}/`);
       expect(result.encryptionKey).toBeTruthy();
       expect(result.nonce).toBeTruthy();
       expect(result.authTag).toBeTruthy();
@@ -74,7 +75,7 @@ describe.skipIf(!postageBatchId)(
       const { contentRef } = await upload(file);
 
       const raw = new Uint8Array(
-        await (await fetch(`${BEE_URL}/bytes/${contentRef}`)).arrayBuffer(),
+        await (await fetch(`${BEE_URL}/bzz/${contentRef}/`)).arrayBuffer(),
       );
       expect(new TextDecoder().decode(raw)).not.toContain('MARKER-plaintext');
     });

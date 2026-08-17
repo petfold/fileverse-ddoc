@@ -162,6 +162,7 @@ function App() {
     diagnosticsInput,
     recheck: recheckSwarm,
     grantAccess: grantSwarmAccess,
+    markDocumentReadOnly,
   } = useSwarmStorage(docId);
   const [swarmStatus, setSwarmStatus] = useState<
     | { state: 'off' }
@@ -403,14 +404,20 @@ function App() {
           setSwarmStatus({ state: 'saved', version: version.index });
         } catch (error) {
           console.error('Swarm save failed', error);
-          setSwarmStatus({
-            state: 'error',
-            message: (error as Error).message,
-          });
+          // A document owned by another identity cannot be written here;
+          // record that so nothing else is attempted and the tag says so.
+          if (/read-only here/i.test((error as Error).message)) {
+            markDocumentReadOnly();
+          } else {
+            setSwarmStatus({
+              state: 'error',
+              message: (error as Error).message,
+            });
+          }
         }
       }, 2000);
     },
-    [docId, docStorage, versionPreview, canWrite],
+    [docId, docStorage, versionPreview, canWrite, markDocumentReadOnly],
   );
 
   // Swarm becoming writable again — a batch bought, or a node that came

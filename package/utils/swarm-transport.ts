@@ -123,6 +123,12 @@ export interface SwarmTransport {
 export interface BeeHttpTransportConfig extends SwarmFeedConfig {
   /** Key signing feed updates. Reads work without it. */
   ownerPrivateKey?: `0x${string}`;
+  /**
+   * Set `false` to wait until an upload has been pushed to the network
+   * before it resolves. Bee's default defers that to a background sync,
+   * which leaves content unretrievable if the node stops first.
+   */
+  deferredUpload?: boolean;
 }
 
 export const createBeeHttpTransport = (
@@ -173,11 +179,22 @@ export const createBeeHttpTransport = (
       status: 'start',
       total: data.length,
     });
-    const response = await swarmFetch(config, '/bytes', {
+    // Uploaded through /bzz as a single file rather than /bytes, so the
+    // reference is manifest-wrapped and therefore resolvable as
+    // `bzz://<reference>/` too. A raw /bytes reference is only readable
+    // through a node's own API: `bzz://` resolves manifests, and the
+    // provider API offers no way to reassemble a bare chunk tree — so a
+    // document stored that way cannot be opened in a Swarm-aware browser
+    // at all. Same content, same addressing, one more level of indirection.
+    const response = await swarmFetch(config, '/bzz?name=ddoc', {
       method: 'POST',
       headers: {
         'content-type': options?.contentType ?? 'application/octet-stream',
         'swarm-postage-batch-id': config.postageBatchId,
+        'swarm-collection': 'false',
+        ...(config.deferredUpload === false
+          ? { 'swarm-deferred-upload': 'false' }
+          : {}),
       },
       body: data,
     });
@@ -196,7 +213,12 @@ export const createBeeHttpTransport = (
 
   async downloadData(reference, options) {
     options?.onProgress?.({ stage: 'download', status: 'start' });
-    const response = await swarmFetch(config, `/bytes/${reference}`);
+    // Trailing slash: the bare path 308-redirects to it.
+    let response = await swarmFetch(config, `/bzz/${reference}/`);
+    if (response.status === 404) {
+      // Written by an earlier version, straight to /bytes.
+      response = await swarmFetch(config, `/bytes/${reference}`);
+    }
     if (response.status === 404) {
       throw new Error(`Content not found on Swarm: ${reference}`);
     }
@@ -325,7 +347,7 @@ export const createSwarmProviderTransport = (
       // natively, so that is the path for bulk reads. Single-chunk content
       // (our document snapshots) still works if bzz:// is unavailable.
       try {
-        const response = await fetch(`bzz://${reference}`);
+        const response = await fetch(`bzz://${reference}/`);
         if (response.ok) {
           return readWithProgress(response, options?.onProgress);
         }
