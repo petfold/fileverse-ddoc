@@ -15,6 +15,8 @@ import { SwarmNodeState } from '../storage/swarm-store';
 export interface SwarmRestoreProgressProps {
   nodeState: SwarmNodeState;
   progress: SwarmProgress | null;
+  /** Hides the postage step where the browser, not this app, manages it. */
+  managesPostage?: boolean;
   error?: string | null;
   onSkip: () => void;
   onRetry: () => void;
@@ -59,6 +61,7 @@ const formatElapsed = (ms: number) => {
 export const SwarmRestoreProgress = ({
   nodeState,
   progress,
+  managesPostage,
   error,
   onSkip,
   onRetry,
@@ -78,9 +81,16 @@ export const SwarmRestoreProgress = ({
         ? progress.stage
         : progress?.stage === 'feed-lookup'
           ? 'feed-lookup'
-          : 'stamp';
+          : managesPostage
+            ? 'feed-lookup'
+            : 'stamp';
 
-  const stepIndex = (key: StepKey) => STEPS.findIndex((s) => s.key === key);
+  // A provider manages postage itself, so naming that step would describe
+  // work this app never does.
+  const steps = managesPostage
+    ? STEPS.filter((s) => s.key !== 'stamp')
+    : STEPS;
+  const stepIndex = (key: StepKey) => steps.findIndex((s) => s.key === key);
   const activeIndex = stepIndex(activeStep);
 
   const downloadPct =
@@ -102,7 +112,7 @@ export const SwarmRestoreProgress = ({
         </div>
 
         <ol className="flex flex-col gap-2 mb-5">
-          {STEPS.map((step, i) => {
+          {steps.map((step, i) => {
             const done = error ? false : i < activeIndex;
             const active = !error && i === activeIndex;
             return (

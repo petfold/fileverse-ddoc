@@ -267,6 +267,7 @@ const isNotFound = (error: unknown): boolean => {
 
 export const createSwarmProviderTransport = (
   provider: SwarmProvider,
+  options: { onProgress?: SwarmProgressHandler } = {},
 ): SwarmTransport => {
   const call = <T>(method: string, params?: unknown): Promise<T> =>
     provider.request({ method, params }) as Promise<T>;
@@ -400,9 +401,18 @@ export const createSwarmProviderTransport = (
       // "give me the latest" lookup as Bee's /feeds offers. Probing costs
       // O(log n) reads, which is acceptable for the update counts a
       // document accumulates.
-      return probeLatestFeedIndex((index) =>
+      //
+      // Reported as feed-lookup so a host's progress display names the step
+      // it is actually on. Several network round trips happen here, and
+      // saying nothing makes the *previous* step look stuck — which is
+      // exactly how this read in a browser: "Checking postage batch" for
+      // half a minute, while the real work was here.
+      options.onProgress?.({ stage: 'feed-lookup', status: 'start' });
+      const head = await probeLatestFeedIndex((index) =>
         this.readFeedUpdate(owner, topic, index),
       );
+      options.onProgress?.({ stage: 'feed-lookup', status: 'done' });
+      return head;
     },
   };
 };
@@ -456,7 +466,7 @@ export const detectSwarmTransport = (
       ? (globalThis as { swarm?: SwarmProvider }).swarm
       : config.provider;
   return injected
-    ? createSwarmProviderTransport(injected)
+    ? createSwarmProviderTransport(injected, { onProgress: config.onProgress })
     : createBeeHttpTransport(config);
 };
 

@@ -68,3 +68,39 @@ describe('SwarmRestoreProgress', () => {
     expect(onRetry).toHaveBeenCalledOnce();
   });
 });
+
+// Through a provider the browser owns postage, so naming that step would
+// describe work this app never does — and while the feed lookup ran with no
+// progress events, the display sat on "Checking postage batch" for half a
+// minute, blaming the wrong step.
+describe('SwarmRestoreProgress under a provider', () => {
+  it('omits the postage step', () => {
+    render(
+      <SwarmRestoreProgress
+        nodeState={{ kind: 'read-only', reason: 'ultra-light-mode' }}
+        progress={null}
+        managesPostage
+        onSkip={noop}
+        onRetry={noop}
+      />,
+    );
+    expect(screen.queryByText(/Checking postage batch/)).toBeNull();
+    expect(screen.getByText(/Finding the latest version/)).toBeTruthy();
+  });
+
+  it('treats an unreported stage as the feed lookup, not postage', () => {
+    render(
+      <SwarmRestoreProgress
+        nodeState={{ kind: 'read-only', reason: 'ultra-light-mode' }}
+        progress={null}
+        managesPostage
+        onSkip={noop}
+        onRetry={noop}
+      />,
+    );
+    const active = screen
+      .getByText(/Finding the latest version/)
+      .className.includes('font-medium');
+    expect(active).toBe(true);
+  });
+});

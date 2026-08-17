@@ -163,6 +163,7 @@ function App() {
     recheck: recheckSwarm,
     grantAccess: grantSwarmAccess,
     markDocumentReadOnly,
+    managesPostage: swarmManagesPostage,
   } = useSwarmStorage(docId);
   const [swarmStatus, setSwarmStatus] = useState<
     | { state: 'off' }
@@ -1290,6 +1291,7 @@ function App() {
         <SwarmRestoreProgress
           nodeState={nodeState}
           progress={swarmProgress}
+          managesPostage={swarmManagesPostage}
           error={restoreError}
           onSkip={() => {
             setRestoreError(null);
