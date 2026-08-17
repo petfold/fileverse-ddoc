@@ -246,6 +246,14 @@ function App() {
   );
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [restoreAttempt, setRestoreAttempt] = useState(0);
+  // A Swarm node that has just started cannot serve yet — it answers HTTP
+  // before its peer handshakes complete (solardev-xyz/ant#78) — and a
+  // browser typically opens the page in exactly that window. Retrying a
+  // few times with a widening gap covers it without spinning forever.
+  const MAX_RESTORE_ATTEMPTS = 5;
+  const retryDelayMs = (attempt: number) =>
+    [2000, 4000, 8000, 12000][attempt] ?? 16000;
+  const [restoreDeferred, setRestoreDeferred] = useState(false);
   useEffect(() => {
     if (!swarmRestoring) return;
     // The node answered but has no batch: reads still work, so carry on.
@@ -258,6 +266,10 @@ function App() {
     // granted access, so before consent there is nothing to look up —
     // open the document and let the notice ask for it.
     if (diagnosticsInput.provider?.reason === 'not-connected') {
+      // Remembered, not abandoned: the effect below picks it up again the
+      // moment access is granted. Without that the document stayed empty
+      // even after the user allowed it.
+      setRestoreDeferred(true);
       setSwarmRestoring(false);
       return;
     }
@@ -287,10 +299,17 @@ function App() {
         if (!cancelled) setSwarmRestoring(false);
       } catch (error) {
         console.warn('Swarm restore failed', error);
-        // Keep the progress screen up with the reason and a retry, rather
-        // than dropping into an empty editor that silently discards the
-        // document that may still be out there.
-        if (!cancelled) setRestoreError((error as Error).message);
+        if (cancelled) return;
+        // Keep the progress screen up rather than dropping into an empty
+        // editor that silently discards a document still out there. Early
+        // failures are usually a node that is not ready yet, so retry a
+        // bounded number of times before asking the reader to.
+        if (restoreAttempt + 1 < MAX_RESTORE_ATTEMPTS) {
+          const delay = retryDelayMs(restoreAttempt);
+          setTimeout(() => setRestoreAttempt((n) => n + 1), delay);
+        } else {
+          setRestoreError((error as Error).message);
+        }
       }
     })();
     return () => {
@@ -304,6 +323,21 @@ function App() {
     restoreAttempt,
     diagnosticsInput.provider?.reason,
   ]);
+  // Access granted after we deferred: try the restore again, but only
+  // while the document is still untouched, so nothing typed is clobbered.
+  useEffect(() => {
+    if (
+      restoreDeferred &&
+      diagnosticsInput.provider &&
+      diagnosticsInput.provider.reason !== 'not-connected' &&
+      !docStore.getContent(docId)
+    ) {
+      setRestoreDeferred(false);
+      setRestoreAttempt(0);
+      setSwarmRestoring(true);
+    }
+  }, [restoreDeferred, diagnosticsInput.provider?.reason, docId]);
+
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const swarmSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -1298,6 +1332,8 @@ function App() {
           nodeState={nodeState}
           progress={swarmProgress}
           managesPostage={swarmManagesPostage}
+          attempt={restoreAttempt + 1}
+          maxAttempts={MAX_RESTORE_ATTEMPTS}
           error={restoreError}
           onSkip={() => {
             setRestoreError(null);

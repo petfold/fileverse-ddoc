@@ -17,6 +17,9 @@ export interface SwarmRestoreProgressProps {
   progress: SwarmProgress | null;
   /** Hides the postage step where the browser, not this app, manages it. */
   managesPostage?: boolean;
+  /** 1-based attempt number, shown once retrying has begun. */
+  attempt?: number;
+  maxAttempts?: number;
   error?: string | null;
   onSkip: () => void;
   onRetry: () => void;
@@ -62,6 +65,8 @@ export const SwarmRestoreProgress = ({
   nodeState,
   progress,
   managesPostage,
+  attempt = 1,
+  maxAttempts,
   error,
   onSkip,
   onRetry,
@@ -107,6 +112,9 @@ export const SwarmRestoreProgress = ({
         <div className="flex items-baseline justify-between mb-4">
           <h2 className="text-[15px] font-medium">Restoring from Swarm</h2>
           <span className="text-[12px] color-text-secondary tabular-nums">
+            {maxAttempts && attempt > 1 && !error
+              ? `attempt ${attempt} of ${maxAttempts} · `
+              : ''}
             {formatElapsed(elapsed)}
           </span>
         </div>
@@ -177,6 +185,11 @@ export const SwarmRestoreProgress = ({
         {error ? (
           <p className="text-[12px] mb-3" role="alert">
             Could not restore this document: {error}
+          </p>
+        ) : attempt > 1 ? (
+          <p className="text-[12px] color-text-secondary mb-3">
+            A Swarm node that has just started cannot serve anything until it
+            has found peers, so the first attempt often fails. Trying again.
           </p>
         ) : slow ? (
           <p className="text-[12px] color-text-secondary mb-3">
