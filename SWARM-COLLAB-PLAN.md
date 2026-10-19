@@ -1,16 +1,25 @@
-# dDoc on swarm-collaborative-docs: plan (proposal, 2026-10-09)
+# Swarm in dDoc: plan (revised 2026-10-19)
 
-The shared plan, its reasons and its open decisions live in swarmtyp: `../swarmtyp/docs/plan.md`, section "Alongside swarmtyp". The encryption design is draft 17 in `../swarmtyp/docs/upstream/swarm-collaborative-docs.md`. This file holds what is specific to dDoc.
+The shared plan, its reasons and its open decisions live in swarmtyp: `../swarmtyp/docs/plan.md`, section "Alongside swarmtyp", and decision D-29 in `../swarmtyp/docs/decisions.md`. The encryption design is draft 17 in `../swarmtyp/docs/upstream/swarm-collaborative-docs.md`. This file holds what is specific to dDoc.
 
-**Where dDoc stands.** Documents and images can live on Swarm already (this fork's storage modules: encrypted snapshots with version history on a single-writer feed, encrypted images, stamp helpers, a transport for a Bee node or `window.swarm`). The storage-agnostic props went upstream as fileverse/fileverse-ddocs#562 (open, pinged 2026-10-09); the Swarm modules' own pull request was never opened. Live editing still goes through Fileverse's Socket.IO server: `package/sync-local` (`SyncManager`, `socketClient`, `presence`, `floor`, `session-tools`), with every update ECIES-encrypted to the room's `roomKey`.
+In short: offer Swarm to Fileverse upstream in two stages, storage first, then live editing, each built and offered finished; fork only if Fileverse declines. The 2026-10-09 version of this file proposed a fork from the start.
 
-**What changes in the fork.**
+**Where dDoc stands.** Documents and images can live on Swarm already (this branch's storage modules: encrypted snapshots with version history on a single-writer feed, encrypted images, stamp helpers, a transport for a Bee node or `window.swarm`). The storage-agnostic image props went upstream as fileverse/fileverse-ddocs#562, merged 2026-10-14 and released in `@fileverse-dev/ddoc` 5.1.14. The Swarm modules' own pull request has not been opened. This branch sits on 4.6.1; upstream is at 7.0.0. Live editing still goes through Fileverse's Socket.IO server: `package/sync-local` (`SyncManager`, `socketClient`, `presence`, `floor`, `session-tools`, `collabStateMachine`). Since 2026-09-14 every update is sealed with XChaCha20-Poly1305 under a key derived from the room's `roomKey`; the older ECIES format is still read.
+
+**Stage 1 here: the Swarm modules as a pull request.**
+- Move onto 7.0.0. The package side is small: the branch's first commit is upstream already (identical to the squashed `cd4e5cfe`), and the 16 `package/utils/swarm-*.ts` files import nothing from the package except the two image types it now exports.
+- Document storage on 6.0's persistence API (`@fileverse-dev/ddoc/persistence`). Restore a Swarm snapshot into the editor's store with `mergeDdocContent`, then mount the way upstream's demo does: the stored body as `initialContent`, with `isNewDocument={false}`. Save on `onLocalChange`, uploading only when `getDdocContentFingerprint` has changed. A new document passes `isNewDocument={true}`: since 7.0 the editor treats a document as new only then, and the demo's `?v2=1` schema choice depends on it. Today's demo uses `initialContent` and `onChange`.
+- Rebuild the Swarm demo from upstream's 7.0 demo, which brings 5.0's host-owned styling and 7.0's sizing with it. Port `SwarmNotice`, `SwarmPostagePanel`, `SwarmRestoreProgress`, `storage/swarm-store.ts`, `deploy-swarm.sh` and the Swarm parts of `App.tsx`. Drop `services.commitToStorage` and `fetchFromStorage` from the collaboration config (removed in 5.0). Deployment notes (`SWARM-DEMO-LINK.md`) and this plan stay out of the pull request.
+- This module is nearly identical to dSheets' `src/swarm`. Whether they become one shared module is our call, made before the pull request opens.
+
+**Stage 2 here: live editing over Swarm.**
 - A `SwarmSyncManager` next to `SyncManager`, chosen by a collaboration prop: it opens a `SwarmDoc` session (SwarmRtc transport) and hands its `Y.Doc` to the editor. Tiptap's collaboration extension binds to the document at editor creation, so the editor is built on `swarmDoc.doc` itself, as swarmtyp does with CodeMirror, not on a copy.
 - Carets: `package/extensions/sync-cursor.ts` reads a Yjs Awareness (`yjsSetup.awareness`, user name and colour through `setLocalStateField('user', …)`). Feed a local Awareness from the library's presence events and publish the local state through it. ProseMirror carets are Yjs relative positions, which the library's `CursorPosition { anchor, head, scope }` cannot carry: this needs the free-form presence payload proposed for swarm-collaborative-docs.
 - Keep the single-writer feed module for explicit saved versions and publishing; live editing uses the library's per-session feeds.
 - Links: the library's invite (`v=1&k=…&h=…` in the fragment) in place of Fileverse's room key in the link; key derivation then follows draft 17.
-- Encryption: today's ECIES-to-`roomKey` disappears with the server. Its replacement is the library's encryption option (draft 17), so this step waits for it, or for the storage interface of swarm-collaborative-docs#20, which gives the fork a place to encrypt in the meantime.
+- Encryption: the room-key sealing goes with the server. Its replacement is the library's encryption option (draft 17), so this step waits for it, or for the storage interface of swarm-collaborative-docs#20, which gives a place to encrypt in the meantime.
+- Steps: F0, a spike in the demo, two browsers on one document through the Swarm Desktop node, carets through the Awareness bridge, snapshot sizes measured. F1, `SwarmSyncManager` behind the existing interface. F2 encryption, F3 Freedom, F4 offer it to Fileverse, as in the shared plan.
 
-**Steps here.** F0: a spike in the demo, two browsers on one document through the Swarm Desktop node, carets through the Awareness bridge, snapshot sizes measured. F1: `SwarmSyncManager` behind the existing interface. F2 encryption, F3 Freedom, as in the shared plan.
+**Stage 3, only if Fileverse declines:** this branch becomes the fork, with the sync layer as its own difference, plus the storage modules if stage 1 was declined too.
 
-**Licence and naming.** AGPL-3.0, as upstream; every deployment links its source; not presented as a Fileverse product.
+**Licence and naming.** Code offered upstream goes in under Fileverse's AGPL-3.0. If we fork: AGPL-3.0, every deployment links its source, and it is not presented as a Fileverse product.
