@@ -278,6 +278,14 @@ function App() {
       cancelled = true;
     };
   }, [storeOnly, docId, storeEpoch]);
+  // Read the store again before the editor (re)mounts. The check goes back
+  // to pending in the same render, so the editor waits instead of mounting
+  // on the previous read: on stale content it would write that back into
+  // the store, and on a stale "new" it would stamp an existing doc as new.
+  const rereadStore = useCallback(() => {
+    setStoreCheck({ status: 'pending' });
+    setStoreEpoch((e) => e + 1);
+  }, []);
   const handleLocalChange = useCallback(() => {
     setLastSavedAt(Date.now());
     scheduleSwarmSaveRef.current();
@@ -449,7 +457,7 @@ function App() {
           console.info(
             `Swarm: restored document version ${snapshot.feedIndex}`,
           );
-          setStoreEpoch((e) => e + 1);
+          rereadStore();
         }
         if (!cancelled) setSwarmRestore('done');
       } catch (error) {
@@ -478,6 +486,7 @@ function App() {
     restoreAttempt,
     diagnosticsInput.provider?.reason,
     documentHasOwnKey,
+    rereadStore,
   ]);
   // Access granted after a deferred restore: try again, but only while the
   // store still holds nothing, so nothing typed meanwhile is overwritten.
@@ -626,8 +635,8 @@ function App() {
     syncVersionParam(null);
     // A fresh live session, mounted from what the store holds now.
     setEditorEpoch((e) => e + 1);
-    setStoreEpoch((e) => e + 1);
-  }, []);
+    rereadStore();
+  }, [rereadStore]);
   // Restore as latest: history is never rewritten; the version is saved
   // again as the newest one and becomes the doc's content here. A merge
   // cannot undo newer edits, so the store is replaced: the editor unmounts
@@ -1063,7 +1072,7 @@ function App() {
                 type="button"
                 ref={swarmTagRef}
                 onClick={openVersionHistory}
-                className="h-6 rounded border color-border-default color-text-secondary text-[12px] font-normal flex items-center gap-1 px-2 cursor-pointer"
+                className="h-6 rounded border color-border-default color-text-secondary text-[12px] font-normal flex items-center gap-1 px-2 cursor-pointer whitespace-nowrap"
                 style={{ backgroundColor: 'hsl(var(--color-bg-secondary))' }}
                 title={
                   (nodeState.kind === 'read-only'
